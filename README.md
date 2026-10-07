@@ -68,7 +68,7 @@ research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
 ```
 
-These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` loads the specified config instead (relative config paths are resolved from the current working directory). With an explicit directory argument, that directory overrides the loaded config's `followup_root`; with only `--config-path`, the configured `followup_root` is retained.
+These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` takes precedence over both the current working directory and any directory argument: it loads the specified config and uses its configured `followup_root`. Relative config paths are resolved from the current working directory.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 

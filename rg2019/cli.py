@@ -36,7 +36,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("directory", nargs="?", type=Path, metavar="DIRECTORY",
                     help="run in this data directory (default: current directory)")
     ap.add_argument("--config", "--config-path", "--config_path", dest="config", type=Path,
-                    help="source config for setup or config to load when running (default: DIRECTORY/config.json)")
+                    help="source config for setup or config to load when running; overrides DIRECTORY (default: DIRECTORY/config.json)")
     ap.add_argument("--setup", type=Path, metavar="FOLLOWUP_ROOT",
                     help="create FOLLOWUP_ROOT/config.json and make its configured folders")
     ap.add_argument("--dry-run", action="store_true",
@@ -334,19 +334,21 @@ def main(argv=None) -> int:
         print(f"Created {config_path} and initialized followup folders under {followup_root}")
         print("Review the generated config and edit tool paths if needed before running the pipeline.")
         return 0
-    run_directory = (args.directory or Path.cwd()).expanduser().resolve()
-    if (args.directory is not None or args.config is None) and not run_directory.is_dir():
-        print(f"CONFIG ERROR: Run directory does not exist or is not a directory: {run_directory}",
-              file=sys.stderr)
-        return 3
-    config_path = (args.config.expanduser() if args.config is not None
-                   else run_directory / "config.json")
+    if args.config is not None:
+        config_path = args.config.expanduser()
+    else:
+        run_directory = (args.directory or Path.cwd()).expanduser().resolve()
+        if not run_directory.is_dir():
+            print(f"CONFIG ERROR: Run directory does not exist or is not a directory: {run_directory}",
+                  file=sys.stderr)
+            return 3
+        config_path = run_directory / "config.json"
     try:
         cfg = cfgmod.load(config_path)
     except cfgmod.ConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 3
-    if args.directory is not None or args.config is None:
+    if args.config is None:
         cfg.followup_root = run_directory
     if args.manual_offset is not None and not (args.participant and len(args.participant) == 1):
         print("CONFIG ERROR: --manual-offset requires exactly one --participant", file=sys.stderr)

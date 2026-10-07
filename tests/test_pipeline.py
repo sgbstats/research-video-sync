@@ -634,20 +634,28 @@ def test_cli_runs_in_selected_directory(tmp_path, monkeypatch, explicit_director
 
 
 @pytest.mark.parametrize("config_option", ["--config", "--config-path", "--config_path"])
-def test_cli_directory_overrides_root_with_external_config(tmp_path, monkeypatch, config_option):
-    followup_root = tmp_path / "followup"
-    (followup_root / "00_INBOX").mkdir(parents=True)
+@pytest.mark.parametrize("directory_kind", ["current", "existing", "missing"])
+def test_cli_external_config_overrides_directory(tmp_path, monkeypatch, config_option, directory_kind):
+    configured_root = tmp_path / "configured followup"
+    (configured_root / "00_INBOX").mkdir(parents=True)
+    working_directory = tmp_path / "working directory"
+    working_directory.mkdir()
+    (working_directory / "config.json").write_text("invalid local config", encoding="utf-8")
+    monkeypatch.chdir(working_directory)
     source_config = tmp_path / "source.json"
     source_config.write_text(json.dumps({
-        "followup_root": str(tmp_path / "old location"), "stability_minutes": 17,
+        "followup_root": str(configured_root), "stability_minutes": 17,
     }), encoding="utf-8")
     monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
     monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
     observed = []
     monkeypatch.setattr(cli, "matching_video_files",
                         lambda cfg: observed.append((cfg.followup_root, cfg.stability_minutes)) or [])
-    assert cli.main([str(followup_root), config_option, str(source_config), "--dry-run"]) == 0
-    assert observed == [(followup_root.resolve(), 17)]
+    directory_args = ([] if directory_kind == "current"
+                      else [str(working_directory if directory_kind == "existing"
+                                else tmp_path / "missing directory")])
+    assert cli.main(directory_args + [config_option, str(source_config), "--dry-run"]) == 0
+    assert observed == [(configured_root.resolve(), 17)]
 
 
 @pytest.mark.parametrize("contents", [
