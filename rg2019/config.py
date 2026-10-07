@@ -160,6 +160,17 @@ def load(path: Path) -> Config:
         data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
         raise ConfigError(f"Config file not found: {path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Cannot read config file ({path}): {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(f"Config file is not valid JSON ({path}): {exc}") from exc
-    return from_dict(data)
+    except UnicodeError as exc:
+        raise ConfigError(f"Config file is not valid UTF-8 ({path}): {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Config must be a JSON object ({path})")
+    try:
+        return from_dict(data)
+    except ConfigError:
+        raise
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ConfigError(f"Invalid config settings ({path}): {exc}") from exc

@@ -33,8 +33,10 @@ log = logging.getLogger("rg2019")
 
 def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="RG2019 INBOX -> RAW -> SYNCED pipeline")
+    ap.add_argument("directory", nargs="?", type=Path, metavar="DIRECTORY",
+                    help="run in this data directory (default: current directory)")
     ap.add_argument("--config", "--config-path", "--config_path", dest="config", type=Path,
-                    help="source config for setup or config to load when running (default: config.json in current directory)")
+                    help="source config for setup or config to load when running (default: DIRECTORY/config.json)")
     ap.add_argument("--setup", type=Path, metavar="FOLLOWUP_ROOT",
                     help="create FOLLOWUP_ROOT/config.json and make its configured folders")
     ap.add_argument("--dry-run", action="store_true",
@@ -49,7 +51,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="with exactly one --participant: use this reviewed offset (>0 trims mom, <0 trims child)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO"])
     ap.add_argument("--version", action="version", version=f"pipeline_rg2019 {__version__}")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.setup is not None and args.directory is not None:
+        ap.error("DIRECTORY cannot be combined with --setup; use --setup DIRECTORY")
+    return args
 
 
 def setup_project(followup_root: Path, config_path: Path, overwrite: bool = False,
@@ -329,12 +334,20 @@ def main(argv=None) -> int:
         print(f"Created {config_path} and initialized followup folders under {followup_root}")
         print("Review the generated config and edit tool paths if needed before running the pipeline.")
         return 0
-    config_path = args.config if args.config is not None else Path("config.json")
+    run_directory = (args.directory or Path.cwd()).expanduser().resolve()
+    if (args.directory is not None or args.config is None) and not run_directory.is_dir():
+        print(f"CONFIG ERROR: Run directory does not exist or is not a directory: {run_directory}",
+              file=sys.stderr)
+        return 3
+    config_path = (args.config.expanduser() if args.config is not None
+                   else run_directory / "config.json")
     try:
         cfg = cfgmod.load(config_path)
     except cfgmod.ConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 3
+    if args.directory is not None or args.config is None:
+        cfg.followup_root = run_directory
     if args.manual_offset is not None and not (args.participant and len(args.participant) == 1):
         print("CONFIG ERROR: --manual-offset requires exactly one --participant", file=sys.stderr)
         return 3

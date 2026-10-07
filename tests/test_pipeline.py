@@ -610,6 +610,88 @@ def test_cli_config_path_overrides_default_config_location(tmp_path, monkeypatch
     assert observed_roots == [original_root]
 
 
+@pytest.mark.parametrize("explicit_directory", [False, True])
+def test_cli_runs_in_selected_directory(tmp_path, monkeypatch, explicit_directory):
+    followup_root = tmp_path / "followup with spaces"
+    (followup_root / "00_INBOX").mkdir(parents=True)
+    (followup_root / "config.json").write_text(
+        json.dumps({"followup_root": str(tmp_path / "old location")}), encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path if explicit_directory else followup_root)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    observed_roots = []
+
+    def preview(cfg, *args):
+        observed_roots.append(cfg.followup_root)
+        return "No work", False, Summary()
+
+    monkeypatch.setattr(cli, "preflight_inventory", preview)
+    args = [followup_root.name] if explicit_directory else []
+    assert cli.main(args) == 0
+    assert observed_roots == [followup_root.resolve()]
+    assert cfgmod.load(followup_root / "config.json").followup_root == tmp_path / "old location"
+
+
+@pytest.mark.parametrize("config_option", ["--config", "--config-path", "--config_path"])
+def test_cli_directory_overrides_root_with_external_config(tmp_path, monkeypatch, config_option):
+    followup_root = tmp_path / "followup"
+    (followup_root / "00_INBOX").mkdir(parents=True)
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({
+        "followup_root": str(tmp_path / "old location"), "stability_minutes": 17,
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    observed = []
+    monkeypatch.setattr(cli, "matching_video_files",
+                        lambda cfg: observed.append((cfg.followup_root, cfg.stability_minutes)) or [])
+    assert cli.main([str(followup_root), config_option, str(source_config), "--dry-run"]) == 0
+    assert observed == [(followup_root.resolve(), 17)]
+
+
+@pytest.mark.parametrize("contents", [
+    None, "{", "[]", "null", "{}", '{"followup_root": 42}',
+    '{"followup_root": ".", "sync": []}',
+    '{"followup_root": ".", "unknown_setting": true}',
+])
+@pytest.mark.parametrize("explicit_directory", [False, True])
+def test_cli_rejects_missing_or_invalid_directory_config(
+        tmp_path, monkeypatch, capsys, contents, explicit_directory):
+    monkeypatch.chdir(tmp_path)
+    if contents is not None:
+        (tmp_path / "config.json").write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(cli.media, "check_tools",
+                        lambda _: pytest.fail("Tool checks must not run with invalid config"))
+    assert cli.main([str(tmp_path)] if explicit_directory else []) == 3
+    assert "CONFIG ERROR:" in capsys.readouterr().err
+    assert not (tmp_path / "99_LOGS_QC").exists()
+
+
+def test_cli_rejects_invalid_run_directory(tmp_path, capsys):
+    assert cli.main([str(tmp_path / "missing")]) == 3
+    assert "Run directory" in capsys.readouterr().err
+
+
+def test_cli_rejects_directory_as_config_file(tmp_path, capsys):
+    (tmp_path / "config.json").mkdir()
+    assert cli.main([str(tmp_path)]) == 3
+    assert "Cannot read config file" in capsys.readouterr().err
+
+
+def test_cli_rejects_non_utf8_config(tmp_path, capsys):
+    (tmp_path / "config.json").write_bytes(b"\xff")
+    assert cli.main([str(tmp_path)]) == 3
+    assert "not valid UTF-8" in capsys.readouterr().err
+
+
+def test_cli_rejects_directory_combined_with_setup(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main([str(tmp_path), "--setup", str(tmp_path)])
+    assert exc.value.code == 2
+    assert "cannot be combined with --setup" in capsys.readouterr().err
+
+
 def test_cli_setup_declines_overwrite_without_changing_destination(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
     followup_root.mkdir()

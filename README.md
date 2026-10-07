@@ -58,7 +58,17 @@ notepad config.json
 The installed `research-video-sync` command and `python -m rg2019` are equivalent. The
 `pipeline_rg2019.py` script remains available for existing scheduled tasks.
 
-`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, setup uses the packaged example config. If `--config-path SOURCE` is supplied, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source file is left unchanged. `--config` and `--config_path` are aliases. When running the pipeline, any of these options loads the config from the path you specify; otherwise, it reads `config.json` from the current working directory. To run with the target copy, run from that directory or pass its config path explicitly. If a destination config already exists, setup asks before replacing it.
+`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, setup uses the packaged example config. If `--config-path SOURCE` is supplied, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source file is left unchanged. `--config` and `--config_path` are aliases. If a destination config already exists, setup asks before replacing it.
+
+Run without arguments to process the current directory, or pass a directory path to process that directory:
+
+```powershell
+research-video-sync
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
+```
+
+These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` loads the specified config instead (relative config paths are resolved from the current working directory). With an explicit directory argument, that directory overrides the loaded config's `followup_root`; with only `--config-path`, the configured `followup_root` is retained.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 

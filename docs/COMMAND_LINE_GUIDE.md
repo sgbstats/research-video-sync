@@ -66,7 +66,11 @@ cd /d "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. By default it uses the packaged example config. If `--config-path SOURCE` is provided, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source remains unchanged. `--config` and `--config_path` are aliases. If the destination config already exists, setup asks before replacing it; answering `yes` continues setup, while any other response cancels without changes. During a normal run, these options load the config directly from the specified path. Without one, the command reads `config.json` from the current working directory; run from the follow-up directory to use the setup copy by default.
+`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. By default it uses the packaged example config. If `--config-path SOURCE` is provided, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source remains unchanged. `--config` and `--config_path` are aliases. If the destination config already exists, setup asks before replacing it; answering `yes` continues setup, while any other response cancels without changes.
+
+Run `research-video-sync` alone to process the current directory using its `config.json`, or run `research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"` to process that directory using its config. Add `--dry-run` to preview either command. The selected directory becomes `followup_root` for that run without editing the config file. A missing, unreadable, or invalid config produces `CONFIG ERROR` and exit code `3` before processing; initialize it with `--setup DIRECTORY` if needed.
+
+During a normal run, `--config-path PATH` and its aliases load the config directly from the specified path (relative to the current working directory). With a directory argument, that directory overrides the config's `followup_root`. Without a directory argument, an explicit config option retains its configured `followup_root`.
 
 If setting up manually instead, set `followup_root` in `config.json` to the full path of your actual project data folder. For example:
 
@@ -192,7 +196,8 @@ These are all command-line options supported by `research-video-sync`:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--config-path PATH` (`--config`, `--config_path`) | Run: `config.json` in the current directory. Setup: packaged example copied to `FOLLOWUP_ROOT/config.json`. | On setup, copy settings from `PATH` into the target config. On a normal run, load `PATH` directly. |
+| `DIRECTORY` (positional) | Current directory | Process this directory using its `config.json`, overriding `followup_root` for this run. Cannot be combined with `--setup`. |
+| `--config-path PATH` (`--config`, `--config_path`) | Run: `config.json` in the selected directory. Setup: packaged example copied to `FOLLOWUP_ROOT/config.json`. | On setup, copy settings from `PATH` into the target config. On a normal run, load `PATH` directly; an explicit `DIRECTORY` still overrides `followup_root`. |
 | `--setup FOLLOWUP_ROOT` | Not set | Initialize a config and its folders, then exit. Existing configs require confirmation before overwrite. |
 | `--dry-run` | Off | Preview decisions without moving files, writing state or encoding. It does not satisfy prior-observation stability. |
 | `--yolo` | Off | For this invocation, set `stability_minutes=0` and skip approval. Transfer-file blocking, the configured recheck and locking remain. Combining with `--dry-run` stays read-only. |
