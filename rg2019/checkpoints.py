@@ -16,6 +16,29 @@ log = logging.getLogger("rg2019")
 Save = Callable[[dict], None]
 
 
+class OutputConflict(media.MediaError):
+    pass
+
+
+def matches_output(path: Path, record: dict) -> bool:
+    if not path.is_file() or path.stat().st_size != record["size"]:
+        return False
+    digest = record.get("sha256")
+    return digest is None or sha256_file(path) == digest
+
+
+def publish_noreplace(partial: Path, final: Path) -> None:
+    try:
+        if os.name == "nt":
+            os.rename(partial, final)
+        else:
+            # Linking atomically reserves the final name without replacing another file.
+            os.link(partial, final)
+            partial.unlink()
+    except FileExistsError as exc:
+        raise OutputConflict(f"{final.name}: output appeared before publication; refusing to overwrite") from exc
+
+
 def workspace(cfg: Config, pid: str) -> Path:
     return cfg.logs_dir / "work" / pid
 
@@ -63,13 +86,11 @@ def audio(cfg: Config, st: dict, role: str, source: Path, save: Save) -> np.memm
 def publish_output(st: dict, partial: Path, final: Path, key: str, info: MediaInfo,
                    method: str, save: Save) -> None:
     record = {"name": final.name, "size": partial.stat().st_size,
-              "duration": info.duration, "method": method}
+              "duration": info.duration, "method": method, "sha256": sha256_file(partial)}
     outputs = st.setdefault("outputs", {"files": {}})
-    outputs["pending"] = {"key": key, "record": record, "sha256": sha256_file(partial)}
+    outputs["pending"] = {"key": key, "record": record, "sha256": record["sha256"]}
     save(st)
-    if final.exists():
-        raise media.MediaError(f"{final.name}: output appeared before publication; refusing to overwrite")
-    os.rename(partial, final)
+    publish_noreplace(partial, final)
     outputs["files"][key] = record
     outputs.pop("pending")
     save(st)
@@ -95,9 +116,13 @@ def recover_outputs(st: dict, folder: Path, save: Save) -> str | None:
     if path.stat().st_size != record["size"] or sha256_file(path) != pending["sha256"]:
         return f"{path.name} differs from the validated publication checkpoint; refusing to overwrite"
     if path == partial:
-        os.rename(partial, final)
+        try:
+            publish_noreplace(partial, final)
+        except OutputConflict as exc:
+            return str(exc)
     else:
         partial.unlink(missing_ok=True)
+    record["sha256"] = pending["sha256"]
     outputs["files"][pending["key"]] = record
     outputs.pop("pending")
     save(st)

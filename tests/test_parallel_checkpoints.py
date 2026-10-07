@@ -222,7 +222,7 @@ def test_kill_publication_boundaries_resume_without_reencoding(cfg, make_partici
     cfg.create_side_by_side = boundary == "side-by-side"
     make_participant(PID)
     save = Pipeline._save
-    rename = checkpoints.os.rename
+    publish = checkpoints.publish_noreplace
     killed = False
 
     def interrupted_save(self, st):
@@ -236,20 +236,20 @@ def test_kill_publication_boundaries_resume_without_reencoding(cfg, make_partici
             raise Killed()
         return save(self, st)
 
-    def interrupted_rename(src, dest):
+    def interrupted_publication(src, dest):
         nonlocal killed
         if not killed and boundary == "pending-save" and str(src).endswith(".mp4.partial"):
             killed = True
             raise Killed()
-        return rename(src, dest)
+        return publish(src, dest)
 
     monkeypatch.setattr(Pipeline, "_save", interrupted_save)
-    monkeypatch.setattr(checkpoints.os, "rename", interrupted_rename)
+    monkeypatch.setattr(checkpoints, "publish_noreplace", interrupted_publication)
     with pytest.raises(Killed):
         Pipeline(cfg).run()
     assert killed
     monkeypatch.setattr(Pipeline, "_save", save)
-    monkeypatch.setattr(checkpoints.os, "rename", rename)
+    monkeypatch.setattr(checkpoints, "publish_noreplace", publish)
     encode = media.encode
     side = media.side_by_side
 

@@ -190,7 +190,13 @@ publication records are saved atomically in the participant's state file. A rest
 completed audio, saved offsets, and committed videos, including a video published just before
 the process was killed. An unfinished individual encode restarts from its beginning, not from
 the last frame. An interrupted correlation calculation is recalculated unless its offset was saved.
-Unrelated or altered final outputs are still conflicts and are never silently adopted or overwritten.
+Committed outputs retain their SHA-256 and are checked whenever reused, including same-size edits.
+Unrelated or altered final outputs are conflicts and are never silently adopted or overwritten.
+Legacy output records without a checksum retain size-only validation; deliberate reprocessing
+creates checksum-protected outputs. Full output checks add disk reads on subsequent runs.
+Publication never replaces an existing filename: Windows uses a no-replace rename, and POSIX
+uses an atomic hard link followed by removal of the partial name. POSIX output storage must
+support hard links; an unsupported filesystem produces an explicit failure, not an unsafe fallback.
 Do **not** use `--reprocess` to resume: that deliberately archives outputs and discards prior sync work.
 
 Allow scratch space for mono PCM: at 8000 Hz, 16-bit, each camera uses approximately 58 MB per
@@ -312,7 +318,7 @@ Never edit `01_RAW`. Do not delete state files casually: without state a finishe
 and becomes `OUTPUT_CONFLICT` (safe, but needs a manual step). Turning `create_side_by_side` on later does **not**
 retro-generate files for completed participants; use `--reprocess` for those you want. Once a side-by-side file has been
 created and `create_side_by_side` is on, it is part of the completion check: if it is later deleted it is regenerated from the
-synced videos on the next run; if it exists but differs from the recorded size it is flagged `OUTPUT_CONFLICT` and never overwritten.
+synced videos on the next run; if it exists but differs from the recorded size or SHA-256 it is flagged `OUTPUT_CONFLICT` and never overwritten.
 
 ## 7. Troubleshooting
 

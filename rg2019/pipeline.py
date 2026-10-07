@@ -6,9 +6,9 @@ Design rules
   promoted, files in RAW are only ever opened for reading (ffprobe/ffmpeg -i).
 * State and logs live in 99_LOGS_QC (state/<ID>.json + pipeline_status.csv).
 * One broken participant never stops the batch: every participant runs inside try/except.
-* Idempotent: a SUCCESS participant with intact outputs is skipped (cheap size checks only,
-  RAW is never re-hashed); interrupted participants resume from recorded state.
-* Outputs are written as *.partial and renamed atomically after ffmpeg + ffprobe succeed.
+* Idempotent: a SUCCESS participant with intact outputs is skipped (output hashes checked when
+  recorded, unchanged RAW never re-hashed); interrupted participants resume from recorded state.
+* Outputs are written as *.partial and published without replacement after ffmpeg + ffprobe succeed.
 * --dry-run performs read-only decisions and mutates nothing (no moves, no state, no video).
 """
 from __future__ import annotations
@@ -651,7 +651,7 @@ class Pipeline:
             f = out / rec["name"] if rec else None
             suffix = "side_by_side" if key == "side_by_side" else f"{key}_synced"
             if (not rec or rec["name"] != self._output_name(st["participant_id"], suffix)
-                    or not f.is_file() or f.stat().st_size != rec["size"]):
+                    or not checkpoints.matches_output(f, rec)):
                 return False
         return True
 
@@ -706,6 +706,13 @@ class Pipeline:
             if st.get("stage") == "PROMOTING":
                 st["stage"], st["raw_promoted_at"] = "RAW", st.get("raw_promoted_at") or self._iso()
                 self._set(st, S.RAW_PROMOTED, "promotion completed")
+        for key, rec in st.get("outputs", {}).get("files", {}).items():
+            if key not in ROLES and not (key == "side_by_side" and cfg.create_side_by_side):
+                continue
+            existing = out / rec["name"]
+            if existing.exists() and not checkpoints.matches_output(existing, rec):
+                return self._fail(st, S.OUTPUT_CONFLICT,
+                                  f"{existing.name} differs from its recorded size or SHA-256; not overwriting.")
         src = {r: (raw / st["sources"][r]["name"], MediaInfo(**st["sources"][r]["media"])) for r in ROLES}
         job = PreparedPair(pid, st, src, out)
         return job if self._preparing else self._finish_raw(job)
@@ -793,7 +800,7 @@ class Pipeline:
                     return self._fail(st, S.OUTPUT_CONFLICT,
                                       "Configured video_description differs from recorded outputs; "
                                       "use --reprocess to change output names.")
-                if not (rec and final.is_file() and final.stat().st_size == rec["size"]):
+                if not (rec and checkpoints.matches_output(final, rec)):
                     if final.exists():       # unrecorded or truncated/modified: never overwrite
                         return self._fail(st, S.OUTPUT_CONFLICT,
                                           f"{final.name} exists in 02_SYNCED but does not match the recorded "
@@ -802,6 +809,8 @@ class Pipeline:
                     media.side_by_side(cfg, out / files["mom"]["name"], out / files["child"]["name"], part)
                     self._commit(st, part, final, "side_by_side", None, "reencode")
                     self._save(st)
+        except checkpoints.OutputConflict as exc:
+            return self._fail(st, S.OUTPUT_CONFLICT, str(exc))
         except MediaError as exc:
             st["attempts"] = st.get("attempts", 0) + 1
             return self._fail(st, S.ENCODE_FAILED, str(exc))
@@ -825,7 +834,7 @@ class Pipeline:
                        "Configured video_description differs from recorded outputs; "
                        "use --reprocess to change output names.")
             return False
-        if rec and final.is_file() and final.stat().st_size == rec["size"]:
+        if rec and checkpoints.matches_output(final, rec):
             return True                                   # already produced by an earlier (interrupted) run
         if final.exists():
             self._fail(st, S.OUTPUT_CONFLICT, f"{final.name} exists in 02_SYNCED but does not match the "
@@ -841,7 +850,7 @@ class Pipeline:
 
     def _commit(self, st: dict, part: Path, final: Path, key: str,
                 expected: float | None, method: str):
-        """Validate the .partial with ffprobe, then rename atomically."""
+        """Validate the .partial with ffprobe, then publish without replacing another file."""
         cfg = self.cfg
         pi = media.probe(cfg, part)
         if not (pi.has_video and pi.has_audio and pi.duration and pi.duration > 0):
