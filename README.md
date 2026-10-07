@@ -3,7 +3,7 @@
 Audio-based synchronisation of the two camera recordings (mother / child) of the RG2019 follow-up
 study, designed for a **Synology-Drive-synchronised project folder** on a private Windows workstation.
 
-> **Production = `pipeline_rg2019.py` (v2, Python).**
+> **Production = the installable `rg2019` Python module (v2).** `pipeline_rg2019.py` remains a compatible script entry point.
 > `sync_research_project.sh` and `sync_videos.sh` are **LEGACY**, kept only for history. Do **not** use them
 > on the NAS workflow: they write markers inside participant folders, trim the wrong camera
 > (`sync_videos.sh`), and abort after the first participant (`set -e`). See [docs/LEGACY_AUDIT.md](docs/LEGACY_AUDIT.md).
@@ -54,20 +54,25 @@ Daily flow per participant:
 
 For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COMMAND_LINE_GUIDE.md).
 
-* Windows 10/11 (developed/tested on Linux; all paths use `pathlib`), Python >= 3.10.
-* `ffmpeg` and `ffprobe` (with libx264 and aac) installed; checked at start-up.
-* `pip install -r requirements.txt` (numpy, scipy). Tests: `pip install -r requirements-dev.txt`.
+* Windows 10/11 or Linux, Python >= 3.10.
+* `ffmpeg` and `ffprobe` with libx264 and AAC. If the configured tools are not found on `PATH`,
+  the `static-ffmpeg` dependency downloads its platform binaries on first use; this needs an
+  internet connection but does not require administrator privileges.
+* Install the module and dependencies with `python -m pip install .`.
 
 ```bat
 cd C:\RG2019\research-video-sync
-python -m pip install -r requirements.txt
+python -m pip install .
 python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
+The installed `rg2019` command and `python -m rg2019` are equivalent alternatives to
+`python pipeline_rg2019.py`. The script remains available for existing scheduled tasks.
+
 `--setup` creates a local `config.json` from the example settings, sets `followup_root`, and creates the configured folder layout. An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it.
 
-`config.json` is git-ignored (machine-specific). Only `config.example.json` (fake paths) is committed.
+`config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 
 ## 3. Configuration (`config.json`)
 
@@ -88,7 +93,7 @@ notepad config.json
 | `max_attempts` | `3` | automatic retries for `SYNC_FAILED`/`ENCODE_FAILED` |
 | `sync.*` | see file | sample rate (8000 Hz), `max_lag_seconds` (120), window length (60 s), thresholds; `min_agreeing_windows` must not exceed `fine_windows` |
 | `encode.*` | `fast`, CRF 20, 192k | x264 preset/CRF, AAC bitrate, `copy_untrimmed_when_possible` |
-| `ffmpeg`, `ffprobe` | `ffmpeg`, `ffprobe` | names on `PATH` or absolute paths |
+| `ffmpeg`, `ffprobe` | `ffmpeg`, `ffprobe` | names on `PATH`, managed fallback, or absolute paths |
 
 Unknown keys are rejected (typo protection).
 
@@ -217,7 +222,8 @@ synced videos on the next run; if it exists but differs from the recorded size i
 
 ## 7. Troubleshooting
 
-* *`ffmpeg was not found`* - use absolute paths in `config.json` (scheduled tasks often lack your `PATH`).
+* *`ffmpeg was not found`* - check the configured executable names/absolute paths and internet access
+  for the first managed-binary download (scheduled tasks often have a limited `PATH`).
 * *Participant stays in WAITING in every dry-run* - expected with the default prior-observation rule (dry-run cannot record it); see the dry-run note above.
 * *Participant stays in WAITING* - read the message in `pipeline_status.csv` (`error_message`) or the log; with the default
   settings the first sighting always waits. Lower `stability_minutes`, or set `stability_requires_prior_observation=false`.
@@ -232,12 +238,17 @@ synced videos on the next run; if it exists but differs from the recorded size i
 ## 8. Development and tests
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest            # ~1.5 min; needs ffmpeg; uses only synthetic media generated on the fly
+python -m pip install -e ".[test]"
+python -m pytest            # uses only synthetic media generated on the fly
+python -m build             # build source and wheel distributions
 ```
 
-Layout: `pipeline_rg2019.py` (CLI), `rg2019/` (`config`, `discovery`, `media`, `syncest`, `state`, `pipeline`, `statuses`),
-`tests/`, `docs/`. **Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
+GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10 and 3.13 on
+Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
+trusted publisher on PyPI for the repository and `pypi` environment before publishing.
+
+Layout: `rg2019/` (installable module and CLI), `pipeline_rg2019.py` (compatibility entry point), `tests/`, `docs/`.
+**Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
 logs, participant folders, pipeline state and local configs. Tests never read real study files.
 
 ## 9. Assumptions and known limits

@@ -34,15 +34,35 @@ def _run(cmd: list[str], what: str) -> subprocess.CompletedProcess:
 
 
 def check_tools(cfg: Config) -> dict[str, str]:
-    """Verify ffmpeg and ffprobe exist and run.  Returns their version lines."""
+    """Verify FFmpeg tools; use managed binaries for default names missing from PATH."""
+    paths = {"ffmpeg": shutil.which(cfg.ffmpeg), "ffprobe": shutil.which(cfg.ffprobe)}
+    missing = [name for name, path in paths.items() if path is None]
+    custom_missing = [name for name in missing if getattr(cfg, name) != name]
+    if custom_missing:
+        name = custom_missing[0]
+        exe = getattr(cfg, name)
+        raise MediaError(f"'{exe}' was not found in PATH (install ffmpeg and add it to PATH, "
+                         f"or set an absolute path in the config)")
+    if missing:
+        try:
+            from static_ffmpeg import run
+
+            bundled_ffmpeg, bundled_ffprobe = run.get_or_fetch_platform_executables_else_raise()
+        except (ImportError, OSError, RuntimeError) as exc:
+            names = " and ".join(missing)
+            raise MediaError(f"'{names}' were not found in PATH and managed FFmpeg binaries "
+                             f"could not be installed: {exc}") from exc
+        bundled = {"ffmpeg": bundled_ffmpeg, "ffprobe": bundled_ffprobe}
+        for name in missing:
+            paths[name] = str(bundled[name])
+            setattr(cfg, name, str(paths[name]))
+
     out = {}
-    for exe in (cfg.ffmpeg, cfg.ffprobe):
-        path = shutil.which(exe)
+    for name, path in paths.items():
         if path is None:
-            raise MediaError(f"'{exe}' was not found in PATH (install ffmpeg and add it to PATH, "
-                             f"or set an absolute path in the config)")
-        r = _run([path, "-version"], f"{exe} -version")
-        out[exe] = r.stdout.splitlines()[0] if r.stdout else path
+            raise MediaError(f"'{getattr(cfg, name)}' was not found in PATH")
+        r = _run([path, "-version"], f"{name} -version")
+        out[getattr(cfg, name)] = r.stdout.splitlines()[0] if r.stdout else path
     return out
 
 
