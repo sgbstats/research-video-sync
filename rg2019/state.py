@@ -162,11 +162,7 @@ class RunLock:
         # Lock a separate, stable inode: locking the replaceable run lock itself would let a
         # contender lock an old inode and delete a new owner's record during reclaim.
         guard = self.path.with_name(self.path.name + ".guard")
-        with open(guard, "a+b") as fh:
-            fh.seek(0, os.SEEK_END)
-            if fh.tell() == 0:
-                fh.write(b"\0")
-                fh.flush()
+        with open(guard, "a+b", buffering=0) as fh:
             fh.seek(0)
             if os.name == "nt":
                 import msvcrt
@@ -175,6 +171,13 @@ class RunLock:
                 import fcntl
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             try:
+                # Windows can lock beyond EOF. Initialize only after locking so another
+                # contender cannot flush byte zero while it is locked by this owner.
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
                 yield
             finally:
                 fh.seek(0)

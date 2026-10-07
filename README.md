@@ -332,7 +332,8 @@ synced videos on the next run; if it exists but differs from the recorded size o
   legacy or malformed locks retain age-based stale recovery.
   Do not delete a lock until you have confirmed no pipeline or its encoders are still running.
   The persistent `pipeline.lock.guard` file is an OS-locking aid, not evidence of an active run;
-  do not delete it while processes could be using it.
+  its initialization is serialized under the OS lock, including on Windows. Do not delete it
+  while processes could be using it.
 * *`PROMOTE_FAILED`* - a file was open/locked (Synology Drive, antivirus); just re-run. INBOX and RAW must be on one volume.
 * *`LOW_CONFIDENCE`* - inspect `99_LOGS_QC\state\IDxxxx.json` (`sync.details`): quiet recordings, camera mics far apart,
   an offset larger than `max_lag_seconds`. Play both videos, decide, use `--manual-offset`.

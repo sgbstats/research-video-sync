@@ -387,6 +387,66 @@ def test_losing_token_does_not_touch_or_remove_new_owners_lock(tmp_path):
     assert json.loads(lock_path.read_text())["token"] == "f" * 32
 
 
+@pytest.mark.parametrize("existing", [None, b"", b"\0"])
+def test_guard_initialization_is_protected_by_os_lock(tmp_path, monkeypatch, existing):
+    lock = RunLock(tmp_path / "pipeline.lock", 24)
+    guard = tmp_path / "pipeline.lock.guard"
+    if existing is not None:
+        guard.write_bytes(existing)
+    locked = False
+    writes = []
+    if os.name == "nt":
+        import msvcrt
+        original_lock = msvcrt.locking
+        def locking(fd, mode, count):
+            nonlocal locked
+            original_lock(fd, mode, count)
+            locked = mode != msvcrt.LK_UNLCK
+        monkeypatch.setattr(msvcrt, "locking", locking)
+    else:
+        import fcntl
+        original_lock = fcntl.flock
+        def flock(fd, mode):
+            nonlocal locked
+            original_lock(fd, mode)
+            locked = mode != fcntl.LOCK_UN
+        monkeypatch.setattr(fcntl, "flock", flock)
+
+    original_open = open
+    class CheckedGuard:
+        def __init__(self, fh):
+            self.fh = fh
+        def __getattr__(self, name):
+            return getattr(self.fh, name)
+        def __enter__(self):
+            self.fh.__enter__()
+            return self
+        def __exit__(self, *exc):
+            return self.fh.__exit__(*exc)
+        def write(self, data):
+            assert locked, "guard initialization must not race with an OS-locked contender"
+            writes.append(data)
+            return self.fh.write(data)
+        def flush(self):
+            assert locked, "guard initialization must be flushed before unlocking"
+            return self.fh.flush()
+
+    def checked_open(path, *args, **kwargs):
+        assert path == guard
+        return CheckedGuard(original_open(path, *args, **kwargs))
+    monkeypatch.setattr(state_module, "open", checked_open, raising=False)
+    with lock._guard():
+        assert locked
+    assert not locked
+    assert guard.read_bytes() == b"\0"
+    assert writes == ([] if existing == b"\0" else [b"\0"])
+    with lock._guard():
+        assert locked
+    assert not locked
+    assert guard.read_bytes() == b"\0"
+    assert writes == ([] if existing == b"\0" else [b"\0"])
+
+
 def test_competing_reclaims_allow_only_one_owner(tmp_path):
     lock_path = tmp_path / "pipeline.lock"
     lock_path.write_text("legacy abandoned lock")
