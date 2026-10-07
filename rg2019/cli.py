@@ -66,6 +66,8 @@ def setup_project(followup_root: Path, config_path: Path, overwrite: bool = Fals
     template_path = (Path(__file__).resolve().parent / "config.example.json"
                      if source_config is None else source_config)
     data = json.loads(template_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise cfgmod.ConfigError(f"Config must be a JSON object ({template_path})")
     data["followup_root"] = str(followup_root.expanduser().resolve())
     cfg = cfgmod.from_dict(data)
 
@@ -386,8 +388,12 @@ def main(argv=None) -> int:
         for line in report.splitlines():
             log.info("%s", line)
         if cfg.lock_file.exists():
-            log.error("run lock already exists: %s", cfg.lock_file)
-            return 3
+            try:
+                with RunLock(cfg.lock_file, cfg.lock_stale_hours):
+                    pass
+            except RuntimeError as exc:
+                log.error("%s", exc)
+                return 3
         if not has_work:
             if cfg.stability_minutes > 0 and cfg.stability_requires_prior_observation:
                 try:

@@ -15,9 +15,11 @@ For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COM
 For unattended daily runs on Windows, see the [Task Scheduler guide](docs/WINDOWS_TASK_SCHEDULER.md).
 
 * Windows 10/11 or Linux, Python >= 3.10.
-* `ffmpeg` and `ffprobe` with libx264 and AAC. If the configured tools are not found on `PATH`,
-  the `static-ffmpeg` dependency downloads its platform binaries on first use; this needs an
-  internet connection but does not require administrator privileges.
+* `ffmpeg` and `ffprobe` with libx264 and AAC. When the default names `ffmpeg` and `ffprobe`
+  are not found on `PATH`, the `static-ffmpeg` dependency downloads the missing tools'
+  platform binaries on first use; this needs an internet connection but does not require
+  administrator privileges. Explicitly configured executable names or paths must exist;
+  a missing custom executable produces an error and is never silently replaced.
 
 Install from a source checkout (recommended until a release is published to PyPI):
 
@@ -71,6 +73,17 @@ research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
 These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` takes precedence over both the current working directory and any directory argument: it loads the specified config and uses its configured `followup_root`. Relative config paths are resolved from the current working directory.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
+
+### v2 upgrade notes
+
+The processing defaults intentionally changed at the user's request: `stability_minutes`
+is now `0` rather than `120`, and `create_side_by_side` is now `true` rather than `false`.
+This affects both new configs and existing configs that omit these keys; explicitly saved
+values are retained. The zero-minute default disables the minimum-age and prior-observation
+wait, but keeps transfer-file blocking and the growth re-check. Side-by-side output adds an
+extra encode and requires additional processing time and disk space. To preserve the previous
+behavior, explicitly set `"stability_minutes": 120` and `"create_side_by_side": false` before
+upgrading.
 
 ## 2. Architecture
 

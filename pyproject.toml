@@ -22,6 +22,7 @@ research-video-sync = "rg2019.cli:main"
 
 [tool.setuptools]
 packages = ["rg2019"]
+py-modules = ["pipeline_rg2019"]
 
 [tool.setuptools.package-data]
 rg2019 = ["config.example.json"]

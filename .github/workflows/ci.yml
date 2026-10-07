@@ -34,3 +34,4 @@ jobs:
           python -c "import glob,subprocess,sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', '--force-reinstall', glob.glob('dist/*.whl')[0]])"
           research-video-sync --version
           python -c "import subprocess,sys,tempfile; subprocess.run([sys.executable, '-m', 'rg2019', '--version'], cwd=tempfile.gettempdir(), check=True)"
+          python -c "import subprocess,sys,tempfile; subprocess.run([sys.executable, '-I', '-m', 'pipeline_rg2019', '--version'], cwd=tempfile.gettempdir(), check=True)"

@@ -4,6 +4,7 @@ import importlib.metadata
 import importlib.resources
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,34 @@ def test_python_module_entry_point_displays_version():
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0
+    assert result.stdout.strip() == "pipeline_rg2019 2.0.0"
+
+
+def test_built_wheel_includes_working_compatibility_module(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    wheels = tmp_path / "wheels"
+    subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--no-isolation", "--outdir", str(wheels)],
+        cwd=project, capture_output=True, text=True, check=True,
+    )
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "--no-index",
+         "--target", str(installed), str(next(wheels.glob("*.whl")))],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    code = (
+        "import sys, runpy, importlib.util; from pathlib import Path; "
+        f"sys.path.insert(0, {str(installed)!r}); "
+        f"assert Path(importlib.util.find_spec('pipeline_rg2019').origin) == "
+        f"Path({str(installed)!r}) / 'pipeline_rg2019.py'; "
+        "sys.argv = ['pipeline_rg2019', '--version']; "
+        "runpy.run_module('pipeline_rg2019', run_name='__main__')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
     assert result.stdout.strip() == "pipeline_rg2019 2.0.0"
 
 

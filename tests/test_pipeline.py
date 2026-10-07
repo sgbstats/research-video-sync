@@ -717,6 +717,56 @@ def test_cli_setup_declines_overwrite_without_changing_destination(tmp_path, cap
     assert "Setup cancelled" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("contents", [
+    "[]", "null", '{"sync": []}', '{"encode": null}',
+    '{"mom_pattern": 42}', '{"video_extensions": null}', "{",
+])
+def test_cli_setup_rejects_invalid_source_without_creating_destination(tmp_path, capsys, contents):
+    source = tmp_path / "source.json"
+    source.write_text(contents, encoding="utf-8")
+    destination = tmp_path / "new followup"
+    assert cli.main(["--setup", str(destination), "--config-path", str(source)]) == 3
+    assert "SETUP ERROR:" in capsys.readouterr().err
+    assert not destination.exists()
+    assert source.read_text(encoding="utf-8") == contents
+
+
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("has_work", [False, True])
+def test_cli_respects_active_locks_and_recovers_stale_locks(tmp_path, monkeypatch, stale, has_work):
+    root = tmp_path / "followup"
+    (root / "00_INBOX").mkdir(parents=True)
+    config_path = root / "config.json"
+    config_path.write_text(json.dumps({"followup_root": str(root)}), encoding="utf-8")
+    cfg = cfgmod.load(config_path)
+    cfg.lock_file.parent.mkdir(parents=True)
+    cfg.lock_file.write_text("foreign lock", encoding="utf-8")
+    if stale:
+        old = datetime.now().timestamp() - 48 * 3600
+        os.utime(cfg.lock_file, (old, old))
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    monkeypatch.setattr(cli, "preflight_inventory", lambda *args: ("Report", has_work, Summary()))
+    approvals = []
+    monkeypatch.setattr(cli, "request_approval", lambda: approvals.append(True) or True)
+    runs = []
+
+    def process(self):
+        assert self.cfg.lock_file.exists()
+        assert "foreign lock" not in self.cfg.lock_file.read_text(encoding="utf-8")
+        runs.append(True)
+        return Summary()
+
+    monkeypatch.setattr(Pipeline, "run", process)
+    assert cli.main(["--config-path", str(config_path)]) == (0 if stale else 3)
+    assert approvals == ([True] if stale and has_work else [])
+    assert runs == ([True] if stale and has_work else [])
+    if stale:
+        assert not cfg.lock_file.exists()
+    else:
+        assert cfg.lock_file.read_text(encoding="utf-8") == "foreign lock"
+
+
 def test_cli_setup_confirms_overwrite_then_creates_folders(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
     followup_root.mkdir()
