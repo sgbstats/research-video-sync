@@ -17,7 +17,8 @@ from rg2019 import cli
 def test_distribution_exposes_console_script_and_package_template():
     distribution = importlib.metadata.distribution("research-video-sync")
     scripts = {entry.name: entry.value for entry in distribution.entry_points}
-    assert scripts["rg2019"] == "rg2019.cli:main"
+    assert scripts["research-video-sync"] == "rg2019.cli:main"
+    assert "rg2019" not in scripts
     assert importlib.resources.files("rg2019").joinpath("config.example.json").is_file()
 
 

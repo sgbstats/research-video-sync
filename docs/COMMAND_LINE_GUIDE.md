@@ -1,6 +1,6 @@
 # Beginner's guide: running the video-sync tool from the command line
 
-This guide is for Windows users who want to run the video-sync pipeline from a terminal after getting its code from GitHub. The production tool is `pipeline_rg2019.py`. **Do not run the `.sh` scripts**; they are legacy scripts and are not for the current workflow.
+This guide is for Windows users who want to run the video-sync pipeline from a terminal after getting its code from GitHub. The production command is `research-video-sync`; `pipeline_rg2019.py` remains available for compatibility. **Do not run the `.sh` scripts**; they are legacy scripts and are not for the current workflow.
 
 The pipeline moves original videos from `00_INBOX` into `01_RAW`, then creates synchronized outputs under `02_SYNCED`. Treat a real run as a file operation, not just a preview.
 
@@ -45,24 +45,27 @@ If the repository is **already cloned**, do not clone it again; open Command Pro
 
 ## 3. Install the Python packages
 
-From the repository folder, run:
+From the repository folder, install the package and its dependencies:
 
 ```bat
-python -m pip install -r requirements.txt
+python -m pip install .
 ```
 
-This installs the required NumPy and SciPy packages. If `python` is not recognized but the Python launcher is installed, try using `py` in place of `python` in the commands in this guide.
+This installs the `research-video-sync` command and required packages. If `ffmpeg` or
+`ffprobe` is not on `PATH`, their platform binaries are downloaded on first use. If
+`python` is not recognized but the Python launcher is installed, try using `py` in place
+of `python` in the commands in this guide.
 
 ## 4. Set up your configuration
 
 Create a local configuration and the default follow-up folder structure in one step:
 
 ```bat
-python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-`--setup` copies the project defaults into `config.json`, sets `followup_root` to the supplied path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. You can choose a different config destination with `--config`, for example `python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config "D:\settings\rg2019.json"`.
+`--setup` copies the project defaults into `config.json`, sets `followup_root` to the supplied path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. You can choose a different config destination with `--config`, for example `research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config "D:\settings\rg2019.json"`.
 
 If setting up manually instead, set `followup_root` in `config.json` to the full path of your actual project data folder. For example:
 
@@ -146,7 +149,7 @@ For WCHADS data, change the config.json to:
 Always start with a dry run:
 
 ```bat
-python pipeline_rg2019.py --config config.json --dry-run
+research-video-sync --config config.json --dry-run
 ```
 
 Read the output and make sure the folders and participant videos it identifies are the ones you expect. A dry run does not create folders or write state; it lists matching videos and reports those waiting for stability. A real run prints a pre-run inventory of source videos to sync and those skipped or blocked (including missing/ambiguous matches, unsupported suffixes, and already-synced participants). When videos are eligible and `require_approval` is `true`, it requires you to type `yes` before processing. Any other response cancels and returns exit code `1`.
@@ -159,7 +162,7 @@ With the default settings, a new participant can remain in a waiting status duri
 Only after reviewing the dry-run output, start a real run:
 
 ```bat
-python pipeline_rg2019.py --config config.json
+research-video-sync --config config.json
 ```
 
 The pipeline waits until incoming files appear stable. With the default configuration, files must be at least 120 minutes old and must have been observed unchanged during an earlier real run; consequently, a new participant will normally wait until a later run. Transfer-in-progress files also block processing.
@@ -172,19 +175,19 @@ Replace `ID100392` with the participant ID you intend to process.
 
 | What you want to do | Example |
 |---|---|
-| Process only one participant | `python pipeline_rg2019.py --config config.json --participant ID100392` |
-| Preview one participant | `python pipeline_rg2019.py --config config.json --participant ID100392 --dry-run` |
-| Reprocess a participant from `01_RAW` | `python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392` |
-| Show more diagnostic detail | `python pipeline_rg2019.py --config config.json --log-level DEBUG` |
-| Skip approval and the stability-minute wait for this run | `python pipeline_rg2019.py --config config.json --yolo` |
-| Use a manually reviewed offset | `python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34` |
+| Process only one participant | `research-video-sync --config config.json --participant ID100392` |
+| Preview one participant | `research-video-sync --config config.json --participant ID100392 --dry-run` |
+| Reprocess a participant from `01_RAW` | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392` |
+| Show more diagnostic detail | `research-video-sync --config config.json --log-level DEBUG` |
+| Skip approval and the stability-minute wait for this run | `research-video-sync --config config.json --yolo` |
+| Use a manually reviewed offset | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34` |
 
 Reprocessing archives known previous outputs under a `_superseded_...` folder rather than deleting them. A manual offset should only be used after reviewing the videos and deciding the correct offset. It requires exactly one `--participant`; a positive offset trims the mother video, and a negative offset trims the child video. See the README for the full command and details.
 `--yolo` still prints the report and retains transfer-file blocking, the growth re-check, and the run lock; it does not change your saved config. With `--dry-run`, it remains read-only.
 
 ### CLI option reference
 
-These are all command-line options supported by `pipeline_rg2019.py`:
+These are all command-line options supported by `research-video-sync`:
 
 | Option | Default | Effect |
 |---|---|---|

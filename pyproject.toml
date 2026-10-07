@@ -18,7 +18,7 @@ dependencies = [
 test = ["pytest>=7", "build>=1"]
 
 [project.scripts]
-rg2019 = "rg2019.cli:main"
+research-video-sync = "rg2019.cli:main"
 
 [tool.setuptools]
 packages = ["rg2019"]

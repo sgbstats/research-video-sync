@@ -32,4 +32,5 @@ jobs:
       - name: Install and smoke-test the wheel
         run: |
           python -c "import glob,subprocess,sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-deps', '--force-reinstall', glob.glob('dist/*.whl')[0]])"
+          research-video-sync --version
           python -c "import subprocess,sys,tempfile; subprocess.run([sys.executable, '-m', 'rg2019', '--version'], cwd=tempfile.gettempdir(), check=True)"

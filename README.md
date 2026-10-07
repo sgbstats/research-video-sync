@@ -3,7 +3,7 @@
 Audio-based synchronisation of the two camera recordings (mother / child) of the RG2019 follow-up
 study, designed for a **Synology-Drive-synchronised project folder** on a private Windows workstation.
 
-> **Production = the installable `rg2019` Python module (v2).** `pipeline_rg2019.py` remains a compatible script entry point.
+> **Production = the installable `research-video-sync` command (v2).** The `rg2019` Python module and `pipeline_rg2019.py` script remain available for compatibility.
 > `sync_research_project.sh` and `sync_videos.sh` are **LEGACY**, kept only for history. Do **not** use them
 > on the NAS workflow: they write markers inside participant folders, trim the wrong camera
 > (`sync_videos.sh`), and abort after the first participant (`set -e`). See [docs/LEGACY_AUDIT.md](docs/LEGACY_AUDIT.md).
@@ -90,12 +90,12 @@ python -m pip install research-video-sync
 Then initialize the machine-specific configuration and folder layout (PowerShell example):
 
 ```powershell
-python -m rg2019 --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-The installed `rg2019` command and `python -m rg2019` are equivalent alternatives to
-`python pipeline_rg2019.py`. The script remains available for existing scheduled tasks.
+The installed `research-video-sync` command and `python -m rg2019` are equivalent. The
+`pipeline_rg2019.py` script remains available for existing scheduled tasks.
 
 `--setup` creates a local `config.json` from the example settings, sets `followup_root`, and creates the configured folder layout. An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it.
 
@@ -128,10 +128,10 @@ Unknown keys are rejected (typo protection).
 
 ```bat
 :: 1) ALWAYS start with a dry run: nothing is moved, encoded, written or deleted
-python pipeline_rg2019.py --config config.json --dry-run
+research-video-sync --config config.json --dry-run
 
 :: 2) real run (this is what the scheduled task does)
-python pipeline_rg2019.py --config config.json
+research-video-sync --config config.json
 ```
 
 Other options: `--setup FOLLOWUP_ROOT` (create config and folder structure), `--participant IDxxxx` (repeatable; restrict to those IDs), `--reprocess IDxxxx`, `--manual-offset SECONDS`, `--yolo` (skip approval and set stability minutes to zero for this invocation),
@@ -233,11 +233,11 @@ Assumption: a **constant** offset (no clock-drift correction).
 
 ```bat
 :: what would happen?
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --dry-run
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --dry-run
 :: recompute from RAW (previous outputs are MOVED to 02_SYNCED\ID100392\_superseded_<timestamp>\, never deleted)
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392
 :: accept a reviewed offset for a LOW_CONFIDENCE participant (positive trims mom, negative trims child)
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34
 ```
 
 To re-run after fixing a problem that is not a sync problem (e.g. a moved conflicting file) no flag is needed.
@@ -274,7 +274,7 @@ GitHub Actions runs tests and builds distributions on pushes and pull requests f
 Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
 trusted publisher on PyPI for the repository and `pypi` environment before publishing.
 
-Layout: `rg2019/` (installable module and CLI), `pipeline_rg2019.py` (compatibility entry point), `tests/`, `docs/`.
+Layout: `research-video-sync` (installed command), `rg2019/` (Python module), `pipeline_rg2019.py` (compatibility entry point), `tests/`, `docs/`.
 **Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
 logs, participant folders, pipeline state and local configs. Tests never read real study files.
 

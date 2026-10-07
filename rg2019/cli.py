@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """RG2019 follow-up video synchronisation pipeline (v2) - command-line entry point.
 
-    python pipeline_rg2019.py --config config.json --dry-run
-    python pipeline_rg2019.py --config config.json
+    research-video-sync --config config.json --dry-run
+    research-video-sync --config config.json
 
 Exit codes: 0 = finished, nothing needs a human;  2 = finished, but some participants need
 manual review or failed;  3 = configuration / tooling / lock problem (nothing was processed).
