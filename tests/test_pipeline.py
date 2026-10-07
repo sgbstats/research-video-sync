@@ -555,14 +555,41 @@ def test_cli_setup_creates_config_and_followup_folders(tmp_path, capsys):
     assert "Created" in capsys.readouterr().out
 
 
-def test_cli_setup_uses_config_json_by_default(tmp_path, monkeypatch):
+def test_cli_setup_creates_config_in_followup_root_by_default(tmp_path, monkeypatch):
     followup_root = tmp_path / "default config followup"
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["--setup", str(followup_root)]) == 0
 
-    assert Path("config.json").is_file()
-    assert cfgmod.load(Path("config.json")).followup_root == followup_root.resolve()
+    config_path = followup_root / "config.json"
+    assert config_path.is_file()
+    assert not (tmp_path / "config.json").exists()
+    assert cfgmod.load(config_path).followup_root == followup_root.resolve()
+
+
+def test_cli_reads_default_config_from_current_followup_directory(tmp_path, monkeypatch):
+    followup_root = tmp_path / "followup"
+    assert cli.main(["--setup", str(followup_root)]) == 0
+    monkeypatch.chdir(followup_root)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    monkeypatch.setattr(cli, "matching_video_files", lambda _: [])
+
+    assert cli.main(["--dry-run"]) == 0
+
+
+def test_cli_config_path_overrides_default_config_location(tmp_path, monkeypatch):
+    followup_root = tmp_path / "followup"
+    config_path = tmp_path / "settings" / "override.json"
+    assert cli.main(["--setup", str(followup_root), "--config-path", str(config_path)]) == 0
+    assert config_path.is_file()
+    assert not (followup_root / "config.json").exists()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    monkeypatch.setattr(cli, "matching_video_files", lambda _: [])
+
+    assert cli.main(["--config-path", str(config_path), "--dry-run"]) == 0
 
 
 def test_cli_setup_declines_overwrite_without_creating_folders(tmp_path, capsys, monkeypatch):

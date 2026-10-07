@@ -62,10 +62,11 @@ Create a local configuration and the default follow-up folder structure in one s
 
 ```bat
 research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+cd /d "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-`--setup` copies the project defaults into `config.json`, sets `followup_root` to the supplied path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. You can choose a different config destination with `--config`, for example `research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config "D:\settings\rg2019.json"`.
+`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. By default, later runs read `config.json` from the current working directory, so run from the follow-up directory or pass its full config path with `--config-path` (`--config` is an equivalent alias). You can choose a different config destination during setup with either option, for example `research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config-path "D:\settings\rg2019.json"`.
 
 If setting up manually instead, set `followup_root` in `config.json` to the full path of your actual project data folder. For example:
 
@@ -191,7 +192,7 @@ These are all command-line options supported by `research-video-sync`:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--config PATH` | `config.json` | Load this JSON configuration; with `--setup`, write the generated configuration here. |
+| `--config-path PATH` (`--config PATH`) | `config.json` in the current directory; with `--setup`, `config.json` in `FOLLOWUP_ROOT` | Load this JSON configuration or override where setup writes the generated config. |
 | `--setup FOLLOWUP_ROOT` | Not set | Initialize a config and its folders, then exit. Existing configs require confirmation before overwrite. |
 | `--dry-run` | Off | Preview decisions without moving files, writing state or encoding. It does not satisfy prior-observation stability. |
 | `--yolo` | Off | For this invocation, set `stability_minutes=0` and skip approval. Transfer-file blocking, the configured recheck and locking remain. Combining with `--dry-run` stays read-only. |

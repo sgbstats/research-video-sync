@@ -33,9 +33,10 @@ log = logging.getLogger("rg2019")
 
 def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="RG2019 INBOX -> RAW -> SYNCED pipeline")
-    ap.add_argument("--config", type=Path, default=Path("config.json"), help="path to config.json")
+    ap.add_argument("--config", "--config-path", dest="config", type=Path,
+                    help="path to config.json (default: current directory; --setup defaults to FOLLOWUP_ROOT)")
     ap.add_argument("--setup", type=Path, metavar="FOLLOWUP_ROOT",
-                    help="create config.json for this followup root and make its configured folders")
+                    help="create FOLLOWUP_ROOT/config.json and make its configured folders")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what WOULD happen; moves nothing, writes no state, encodes nothing")
     ap.add_argument("--yolo", action="store_true",
@@ -310,20 +311,23 @@ def request_approval() -> bool:
 def main(argv=None) -> int:
     args = parse_args(argv)
     if args.setup is not None:
-        overwrite = args.config.exists()
-        if overwrite and not confirm_config_overwrite(args.config):
+        followup_root = args.setup.expanduser().resolve()
+        config_path = args.config if args.config is not None else followup_root / "config.json"
+        overwrite = config_path.exists()
+        if overwrite and not confirm_config_overwrite(config_path):
             print("Setup cancelled; config and folders were not changed.")
             return 1
         try:
-            config_path = setup_project(args.setup, args.config, overwrite=overwrite)
+            config_path = setup_project(followup_root, config_path, overwrite=overwrite)
         except (OSError, ValueError, cfgmod.ConfigError) as exc:
             print(f"SETUP ERROR: {exc}", file=sys.stderr)
             return 3
-        print(f"Created {config_path} and initialized followup folders under {args.setup.expanduser().resolve()}")
+        print(f"Created {config_path} and initialized followup folders under {followup_root}")
         print("Review the generated config and edit tool paths if needed before running the pipeline.")
         return 0
+    config_path = args.config if args.config is not None else Path("config.json")
     try:
-        cfg = cfgmod.load(args.config)
+        cfg = cfgmod.load(config_path)
     except cfgmod.ConfigError as exc:
         print(f"CONFIG ERROR: {exc}", file=sys.stderr)
         return 3

@@ -51,13 +51,14 @@ Then initialize the machine-specific configuration and folder layout (PowerShell
 
 ```powershell
 research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+Set-Location "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
 The installed `research-video-sync` command and `python -m rg2019` are equivalent. The
 `pipeline_rg2019.py` script remains available for existing scheduled tasks.
 
-`--setup` creates a local `config.json` from the example settings, sets `followup_root`, and creates the configured folder layout. An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it.
+`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, later runs read `config.json` from the current working directory, so run the command from that target directory or pass `--config-path "D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json"` (`--config` is an equivalent alias). An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it. Passing either option during setup explicitly overrides where the config is created.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 
