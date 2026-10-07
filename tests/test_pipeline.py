@@ -538,12 +538,23 @@ def test_cli_no_eligible_videos_reports_without_approval(
 
 def test_cli_setup_creates_config_and_followup_folders(tmp_path, capsys):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
+    source_config = tmp_path / "parent" / "config.json"
+    source_config.parent.mkdir()
+    source_config.write_text(json.dumps({
+        "followup_root": "old root",
+        "stability_minutes": 17,
+        "create_side_by_side": False,
+    }), encoding="utf-8")
+    original_config = source_config.read_text(encoding="utf-8")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 0
+    assert cli.main(["--setup", str(followup_root), "--config", str(source_config)]) == 0
 
+    config_path = followup_root / "config.json"
     created = cfgmod.load(config_path)
     assert created.followup_root == followup_root.resolve()
+    assert created.stability_minutes == 17
+    assert created.create_side_by_side is False
+    assert source_config.read_text(encoding="utf-8") == original_config
     assert all(path.is_dir() for path in (
         followup_root / "00_INBOX",
         followup_root / "01_RAW",
@@ -580,42 +591,56 @@ def test_cli_reads_default_config_from_current_followup_directory(tmp_path, monk
 
 def test_cli_config_path_overrides_default_config_location(tmp_path, monkeypatch):
     followup_root = tmp_path / "followup"
-    config_path = tmp_path / "settings" / "override.json"
-    assert cli.main(["--setup", str(followup_root), "--config-path", str(config_path)]) == 0
-    assert config_path.is_file()
-    assert not (followup_root / "config.json").exists()
+    original_root = tmp_path / "original-root"
+    (original_root / "00_INBOX").mkdir(parents=True)
+    source_config = tmp_path / "parent" / "config.json"
+    source_config.parent.mkdir()
+    source_config.write_text(json.dumps({"followup_root": str(original_root)}), encoding="utf-8")
+    destination_config = followup_root / "config.json"
+    assert cli.main(["--setup", str(followup_root), "--config_path", str(source_config)]) == 0
+    assert destination_config.is_file()
+    assert cfgmod.load(destination_config).followup_root == followup_root.resolve()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
     monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
-    monkeypatch.setattr(cli, "matching_video_files", lambda _: [])
+    observed_roots = []
+    monkeypatch.setattr(cli, "matching_video_files", lambda cfg: observed_roots.append(cfg.followup_root) or [])
 
-    assert cli.main(["--config-path", str(config_path), "--dry-run"]) == 0
+    assert cli.main(["--config-path", str(source_config), "--dry-run"]) == 0
+    assert observed_roots == [original_root]
 
 
-def test_cli_setup_declines_overwrite_without_creating_folders(tmp_path, capsys, monkeypatch):
+def test_cli_setup_declines_overwrite_without_changing_destination(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
-    config_path.write_text('{"followup_root": "preserve this"}', encoding="utf-8")
-    before = config_path.read_text(encoding="utf-8")
+    followup_root.mkdir()
+    destination_config = followup_root / "config.json"
+    destination_config.write_text('{"followup_root": "preserve this"}', encoding="utf-8")
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({"followup_root": str(followup_root)}), encoding="utf-8")
+    before = destination_config.read_text(encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda _: "no")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 1
+    assert cli.main(["--setup", str(followup_root), "--config-path", str(source_config)]) == 1
 
-    assert config_path.read_text(encoding="utf-8") == before
-    assert not followup_root.exists()
+    assert destination_config.read_text(encoding="utf-8") == before
+    assert not (followup_root / "00_INBOX").exists()
     assert "Setup cancelled" in capsys.readouterr().out
 
 
 def test_cli_setup_confirms_overwrite_then_creates_folders(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
-    config_path.write_text('{"followup_root": "old path"}', encoding="utf-8")
+    followup_root.mkdir()
+    destination_config = followup_root / "config.json"
+    destination_config.write_text('{"followup_root": "old path"}', encoding="utf-8")
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({"followup_root": "source root", "stability_minutes": 9}), encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda _: "yes")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 0
+    assert cli.main(["--setup", str(followup_root), "--config", str(source_config)]) == 0
 
-    created = cfgmod.load(config_path)
+    created = cfgmod.load(destination_config)
     assert created.followup_root == followup_root.resolve()
+    assert created.stability_minutes == 9
     assert all(path.is_dir() for path in (
         followup_root / "00_INBOX",
         followup_root / "01_RAW",

@@ -58,7 +58,7 @@ notepad config.json
 The installed `research-video-sync` command and `python -m rg2019` are equivalent. The
 `pipeline_rg2019.py` script remains available for existing scheduled tasks.
 
-`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, later runs read `config.json` from the current working directory, so run the command from that target directory or pass `--config-path "D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json"` (`--config` is an equivalent alias). An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it. Passing either option during setup explicitly overrides where the config is created.
+`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, setup uses the packaged example config. If `--config-path SOURCE` is supplied, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source file is left unchanged. `--config` and `--config_path` are aliases. When running the pipeline, any of these options loads the config from the path you specify; otherwise, it reads `config.json` from the current working directory. To run with the target copy, run from that directory or pass its config path explicitly. If a destination config already exists, setup asks before replacing it.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 

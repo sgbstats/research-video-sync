@@ -66,7 +66,7 @@ cd /d "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. By default, later runs read `config.json` from the current working directory, so run from the follow-up directory or pass its full config path with `--config-path` (`--config` is an equivalent alias). You can choose a different config destination during setup with either option, for example `research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config-path "D:\settings\rg2019.json"`.
+`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. By default it uses the packaged example config. If `--config-path SOURCE` is provided, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source remains unchanged. `--config` and `--config_path` are aliases. If the destination config already exists, setup asks before replacing it; answering `yes` continues setup, while any other response cancels without changes. During a normal run, these options load the config directly from the specified path. Without one, the command reads `config.json` from the current working directory; run from the follow-up directory to use the setup copy by default.
 
 If setting up manually instead, set `followup_root` in `config.json` to the full path of your actual project data folder. For example:
 
@@ -192,7 +192,7 @@ These are all command-line options supported by `research-video-sync`:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--config-path PATH` (`--config PATH`) | `config.json` in the current directory; with `--setup`, `config.json` in `FOLLOWUP_ROOT` | Load this JSON configuration or override where setup writes the generated config. |
+| `--config-path PATH` (`--config`, `--config_path`) | Run: `config.json` in the current directory. Setup: packaged example copied to `FOLLOWUP_ROOT/config.json`. | On setup, copy settings from `PATH` into the target config. On a normal run, load `PATH` directly. |
 | `--setup FOLLOWUP_ROOT` | Not set | Initialize a config and its folders, then exit. Existing configs require confirmation before overwrite. |
 | `--dry-run` | Off | Preview decisions without moving files, writing state or encoding. It does not satisfy prior-observation stability. |
 | `--yolo` | Off | For this invocation, set `stability_minutes=0` and skip approval. Transfer-file blocking, the configured recheck and locking remain. Combining with `--dry-run` stays read-only. |

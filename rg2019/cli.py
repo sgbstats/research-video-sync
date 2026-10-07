@@ -33,8 +33,8 @@ log = logging.getLogger("rg2019")
 
 def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="RG2019 INBOX -> RAW -> SYNCED pipeline")
-    ap.add_argument("--config", "--config-path", dest="config", type=Path,
-                    help="path to config.json (default: current directory; --setup defaults to FOLLOWUP_ROOT)")
+    ap.add_argument("--config", "--config-path", "--config_path", dest="config", type=Path,
+                    help="source config for setup or config to load when running (default: config.json in current directory)")
     ap.add_argument("--setup", type=Path, metavar="FOLLOWUP_ROOT",
                     help="create FOLLOWUP_ROOT/config.json and make its configured folders")
     ap.add_argument("--dry-run", action="store_true",
@@ -52,12 +52,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def setup_project(followup_root: Path, config_path: Path, overwrite: bool = False) -> Path:
-    """Create a local config.json from the example and initialize its folder layout."""
-    template_path = Path(__file__).resolve().parent / "config.example.json"
+def setup_project(followup_root: Path, config_path: Path, overwrite: bool = False,
+                  source_config: Path | None = None) -> Path:
+    """Copy config settings into the follow-up root and initialize its folder layout."""
     if config_path.exists() and not overwrite:
         raise FileExistsError(f"config already exists: {config_path}; refusing to overwrite it")
 
+    template_path = (Path(__file__).resolve().parent / "config.example.json"
+                     if source_config is None else source_config)
     data = json.loads(template_path.read_text(encoding="utf-8-sig"))
     data["followup_root"] = str(followup_root.expanduser().resolve())
     cfg = cfgmod.from_dict(data)
@@ -312,13 +314,15 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if args.setup is not None:
         followup_root = args.setup.expanduser().resolve()
-        config_path = args.config if args.config is not None else followup_root / "config.json"
+        config_path = followup_root / "config.json"
         overwrite = config_path.exists()
         if overwrite and not confirm_config_overwrite(config_path):
             print("Setup cancelled; config and folders were not changed.")
             return 1
         try:
-            config_path = setup_project(followup_root, config_path, overwrite=overwrite)
+            config_path = setup_project(
+                followup_root, config_path, overwrite=overwrite, source_config=args.config,
+            )
         except (OSError, ValueError, cfgmod.ConfigError) as exc:
             print(f"SETUP ERROR: {exc}", file=sys.stderr)
             return 3
