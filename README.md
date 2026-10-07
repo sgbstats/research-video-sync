@@ -58,12 +58,39 @@ For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COM
 * `ffmpeg` and `ffprobe` with libx264 and AAC. If the configured tools are not found on `PATH`,
   the `static-ffmpeg` dependency downloads its platform binaries on first use; this needs an
   internet connection but does not require administrator privileges.
-* Install the module and dependencies with `python -m pip install .`.
 
-```bat
-cd C:\RG2019\research-video-sync
+Install from a source checkout (recommended until a release is published to PyPI):
+
+```powershell
+git clone https://github.com/sgbstats/research-video-sync.git
+cd research-video-sync
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install .
-python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+```
+
+On Linux, create and activate the virtual environment with:
+
+```bash
+git clone https://github.com/sgbstats/research-video-sync.git
+cd research-video-sync
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+After a release is published to PyPI, the module can also be installed without cloning the repository:
+
+```bash
+python -m pip install research-video-sync
+```
+
+Then initialize the machine-specific configuration and folder layout (PowerShell example):
+
+```powershell
+python -m rg2019 --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
