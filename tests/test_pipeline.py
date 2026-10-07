@@ -55,7 +55,7 @@ def test_end_to_end_known_offsets_trim_the_correct_video(cfg, make_participant, 
     out = cfg.synced_dir / pid
     mom, child = out / f"{pid}_mom_synced.mp4", out / f"{pid}_child_synced.mp4"
     assert mom.is_file() and child.is_file()
-    assert not (out / f"{pid}_side_by_side.mp4").exists()          # default: no side-by-side
+    assert not (out / f"{pid}_side_by_side.mp4").exists()          # fixture explicitly disables side-by-side
     assert sorted(p.name for p in out.iterdir()) == sorted([mom.name, child.name])   # no partials left
 
     st = state(cfg, pid)

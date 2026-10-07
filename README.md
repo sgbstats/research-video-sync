@@ -116,7 +116,7 @@ Daily flow per participant:
 | `stability_minutes` | `0` | age rule + prior-observation timer (see below). `0` disables **only those two**: transfer-file blocking and the growth re-check stay active |
 | `stability_recheck_seconds` | `5` | re-stat files after this pause to catch files still growing; active **even when `stability_minutes` is `0`** (set this to `0` to switch it off) |
 | `stability_requires_prior_observation` | `true` | files must also have been seen unchanged by a *previous run* (see below) |
-| `create_side_by_side` | **`false`** | also create `IDxxxx_side_by_side.mp4` (large) |
+| `create_side_by_side` | **`true`** | also create `IDxxxx_side_by_side.mp4` (large) |
 | `video_description` | `null` | optional filename-safe label; `"pilot visit"` produces `IDxxxx_pilot_visit_mom_synced.mp4` (and labels child and side-by-side outputs) |
 | `require_approval` | `true` | require typing `yes` after the pre-run report on real runs |
 | `max_attempts` | `3` | automatic retries for `SYNC_FAILED`/`ENCODE_FAILED` |

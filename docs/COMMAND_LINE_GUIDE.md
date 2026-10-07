@@ -96,7 +96,7 @@ The keys below are the complete set accepted by the current Python pipeline. Def
 | `child_pattern` | `_child` | Case-insensitive substring marking a child video; must differ from `mom_pattern`. |
 | `video_description` | `null` | Optional filename label inserted after the ID for both synchronized videos and optional side-by-side output. A non-null label may contain letters, digits, single spaces, `_` or `-` between alphanumeric segments (maximum 80 characters); spaces become underscores. Changing it for completed pairs requires `--reprocess`. |
 | `video_extensions` | `[".mp4", ".avi", ".mov", ".mkv"]` | Accepted source extensions; matching is case-insensitive. |
-| `create_side_by_side` | `false` | Also create `<ID>[_description]_side_by_side.mp4`. Enable before processing or use `--reprocess` for completed pairs. |
+| `create_side_by_side` | `true` | Also create `<ID>[_description]_side_by_side.mp4` (large). Disable it before processing if this extra output is not wanted. |
 | `require_approval` | `true` | Prompt for `yes` on real runs with eligible videos. A report with no eligible videos does not prompt. Set to `false` for unattended runs. |
 | `require_ready_marker` | `false` | Require a `READY.txt` marker for incoming material when enabled. |
 | `ready_marker_name` | `READY.txt` | Name of that marker file. |

@@ -59,7 +59,7 @@ class Config:
     stability_minutes: float = 0.0
     stability_recheck_seconds: float = 5.0
     stability_requires_prior_observation: bool = True
-    create_side_by_side: bool = False
+    create_side_by_side: bool = True
     require_approval: bool = True
     max_attempts: int = 3               # automatic retries for SYNC_FAILED / ENCODE_FAILED
     lock_stale_hours: float = 24.0
