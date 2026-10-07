@@ -25,7 +25,7 @@ from rg2019.discovery import (
     valid_participant_id,
 )
 from rg2019.pipeline import Pipeline, Summary
-from rg2019.state import RunLock
+from rg2019.state import RunLock, StateStore
 from rg2019.statuses import S
 
 log = logging.getLogger("rg2019")
@@ -50,10 +50,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--manual-offset", type=float, metavar="SECONDS",
                     help="with exactly one --participant: use this reviewed offset (>0 trims mom, <0 trims child)")
     ap.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO"])
+    ap.add_argument("--workers", type=int, metavar="N",
+                    help="maximum simultaneous video pairs (overrides max_parallel_pairs)")
     ap.add_argument("--version", action="version", version=f"pipeline_rg2019 {__version__}")
     args = ap.parse_args(argv)
     if args.setup is not None and args.directory is not None:
         ap.error("DIRECTORY cannot be combined with --setup; use --setup DIRECTORY")
+    if args.workers is not None and args.workers < 1:
+        ap.error("--workers must be a positive integer")
     return args
 
 
@@ -225,6 +229,7 @@ def preflight_inventory(cfg: cfgmod.Config, only: list[str] | None = None,
     lines = ["", "=" * 64, "PRE-RUN APPROVAL REPORT", "=" * 64,
              f"Will sync: {sum(len(paths) for paths in will_sync.values())} source video(s) "
              f"across {len(will_sync)} participant(s)"]
+    lines.append(f"Maximum parallel pairs: {cfg.max_parallel_pairs}")
 
     def add_group(title: str, groups: dict[str, list[Path]]) -> None:
         count = sum(len(paths) for paths in groups.values())
@@ -352,6 +357,8 @@ def main(argv=None) -> int:
         return 3
     if args.config is None:
         cfg.followup_root = run_directory
+    if args.workers is not None:
+        cfg.max_parallel_pairs = args.workers
     if args.manual_offset is not None and not (args.participant and len(args.participant) == 1):
         print("CONFIG ERROR: --manual-offset requires exactly one --participant", file=sys.stderr)
         return 3
@@ -395,10 +402,15 @@ def main(argv=None) -> int:
                 log.error("%s", exc)
                 return 3
         if not has_work:
-            if cfg.stability_minutes > 0 and cfg.stability_requires_prior_observation:
+            needs_observation = cfg.stability_minutes > 0 and cfg.stability_requires_prior_observation
+            has_state = cfg.state_dir.is_dir()
+            if needs_observation or has_state:
                 try:
                     with RunLock(cfg.lock_file, cfg.lock_stale_hours):
-                        record_first_observations(cfg, preview)
+                        if needs_observation:
+                            record_first_observations(cfg, preview)
+                        if has_state:
+                            StateStore(cfg).rewrite_csv()
                 except RuntimeError as exc:
                     log.error("%s", exc)
                     return 3
@@ -419,6 +431,9 @@ def main(argv=None) -> int:
         try:
             with RunLock(cfg.lock_file, cfg.lock_stale_hours):
                 summary = pipe.run()
+        except (KeyboardInterrupt, media.MediaCancelled):
+            log.warning("Run interrupted; completed checkpoints are retained. Rerun the normal command to resume.")
+            return 130
         except RuntimeError as exc:
             log.error("%s", exc)
             return 3

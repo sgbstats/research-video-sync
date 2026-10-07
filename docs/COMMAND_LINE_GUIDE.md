@@ -108,7 +108,8 @@ The keys below are the complete set accepted by the current Python pipeline. Def
 | `stability_recheck_seconds` | `5` | Pause, then check again for additions, removals or file changes; remains active when `stability_minutes` is `0`. Use `0` to disable this recheck. |
 | `stability_requires_prior_observation` | `true` | With positive `stability_minutes`, require a previous real-run observation of the unchanged files. Dry runs never save observations. |
 | `max_attempts` | `3` | Maximum automatic retries for sync/encode failures before manual reprocessing. |
-| `lock_stale_hours` | `24` | A run lock with no heartbeat for this long can be replaced. |
+| `max_parallel_pairs` | `2` | Maximum concurrent participant pairs; a positive integer. Use `1` for sequential processing. |
+| `lock_stale_hours` | `24` | Age-based recovery for legacy/malformed locks. Structured dead local owners recover immediately; live, foreign or unverifiable owners stay protected. |
 | `ffmpeg` | `ffmpeg` | Executable name on `PATH`, or full path to FFmpeg. |
 | `ffprobe` | `ffprobe` | Executable name on `PATH`, or full path to ffprobe. |
 
@@ -174,6 +175,20 @@ The default `stability_minutes=0` disables the minimum-age and prior-observation
 
 The pipeline accepts pairs directly in `00_INBOX` or in nested folders. Each participant ID needs exactly one `_mom` and one `_child` video in the same folder; the ID comes from the filenames or, if absent there, the folder path. Multiple ID pairs may share a folder. Source folders are preserved in `01_RAW` and `02_SYNCED`; status and logs are recorded under `99_LOGS_QC`. **Do not edit files in `01_RAW`.**
 
+By default, two pairs synchronize/encode concurrently after coordinated readiness checks and promotion.
+Use `--workers 1` for sequential processing or `--workers N` to override `max_parallel_pairs` for a run.
+Dry runs stay sequential and never write checkpoints. Additional workers can increase CPU, memory,
+and disk contention; measure before increasing the limit.
+
+After a failure or killed process, rerun the same normal command. Valid completed audio extractions,
+saved offsets, and published videos are reused; only unfinished stages repeat. An interrupted video
+encode restarts that video from the beginning, not at the last frame. Do not add `--reprocess` merely
+to restart: it deliberately archives outputs and starts synchronization again.
+Checkpoints live in `99_LOGS_QC\state` and `99_LOGS_QC\work\<ID>`; work files contain study audio
+and need about 58 MB per camera-hour at the default sample rate. They are cleaned after success.
+The CSV may lag state after a kill and is not needed to resume. A verified dead local lock owner is
+recovered immediately; an active or unverifiable owner is not bypassed.
+
 ## 7. Useful command options
 
 Replace `ID100392` with the participant ID you intend to process.
@@ -184,6 +199,7 @@ Replace `ID100392` with the participant ID you intend to process.
 | Preview one participant | `research-video-sync --config config.json --participant ID100392 --dry-run` |
 | Reprocess a participant from `01_RAW` | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392` |
 | Show more diagnostic detail | `research-video-sync --config config.json --log-level DEBUG` |
+| Process up to two pairs at once | `research-video-sync --config config.json --workers 2` |
 | Skip approval and the stability-minute wait for this run | `research-video-sync --config config.json --yolo` |
 | Use a manually reviewed offset | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34` |
 
@@ -205,12 +221,14 @@ These are all command-line options supported by `research-video-sync`:
 | `--reprocess ID` | No IDs | Recompute from RAW for this ID and archive existing outputs; repeat for several IDs. |
 | `--manual-offset SECONDS` | Automatic estimation | Use a reviewed offset with exactly one `--participant` (`+` trims mother, `-` trims child). Add `--reprocess ID` when changing a completed pair. |
 | `--log-level {INFO,DEBUG}` | `INFO` | Set logging detail. |
+| `--workers N` | `max_parallel_pairs` (`2`) | Override the maximum simultaneous pairs for this run; `1` is sequential. |
 | `--version` | — | Show the program version and exit. |
 | `-h`, `--help` | — | Show command help and exit. |
 
 ## 8. Check results and troubleshoot
 
 Look at `99_LOGS_QC\\pipeline_status.csv` for the participant statuses and messages. The dated log files are in `99_LOGS_QC\\logs`. The command exits with code `0` when no human action is needed, `2` when something needs review or failed, and `3` for a configuration, tool, or lock problem.
+An interrupted run returns `130` when it can handle the interruption; rerun the normal command to resume.
 
 Common problems:
 

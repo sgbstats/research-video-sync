@@ -62,6 +62,7 @@ class Config:
     create_side_by_side: bool = True
     require_approval: bool = True
     max_attempts: int = 3               # automatic retries for SYNC_FAILED / ENCODE_FAILED
+    max_parallel_pairs: int = 2
     lock_stale_hours: float = 24.0
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
@@ -158,6 +159,8 @@ def _from_dict(data: dict[str, Any], path_cls: type[PurePath]) -> Config:
         cfg.video_description = cfg.video_description.replace(" ", "_")
     if not isinstance(cfg.require_approval, bool):
         raise ConfigError("require_approval must be true or false")
+    if type(cfg.max_parallel_pairs) is not int or cfg.max_parallel_pairs < 1:
+        raise ConfigError("max_parallel_pairs must be a positive integer")
     cfg.video_extensions = [e.lower() if e.startswith(".") else "." + e.lower()
                             for e in cfg.video_extensions]
     dirs = {cfg.inbox, cfg.raw, cfg.synced, cfg.logs_qc}
