@@ -55,7 +55,7 @@ def test_end_to_end_known_offsets_trim_the_correct_video(cfg, make_participant, 
     out = cfg.synced_dir / pid
     mom, child = out / f"{pid}_mom_synced.mp4", out / f"{pid}_child_synced.mp4"
     assert mom.is_file() and child.is_file()
-    assert not (out / f"{pid}_side_by_side.mp4").exists()          # default: no side-by-side
+    assert not (out / f"{pid}_side_by_side.mp4").exists()          # fixture explicitly disables side-by-side
     assert sorted(p.name for p in out.iterdir()) == sorted([mom.name, child.name])   # no partials left
 
     st = state(cfg, pid)
@@ -538,12 +538,23 @@ def test_cli_no_eligible_videos_reports_without_approval(
 
 def test_cli_setup_creates_config_and_followup_folders(tmp_path, capsys):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
+    source_config = tmp_path / "parent" / "config.json"
+    source_config.parent.mkdir()
+    source_config.write_text(json.dumps({
+        "followup_root": "old root",
+        "stability_minutes": 17,
+        "create_side_by_side": False,
+    }), encoding="utf-8")
+    original_config = source_config.read_text(encoding="utf-8")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 0
+    assert cli.main(["--setup", str(followup_root), "--config", str(source_config)]) == 0
 
+    config_path = followup_root / "config.json"
     created = cfgmod.load(config_path)
     assert created.followup_root == followup_root.resolve()
+    assert created.stability_minutes == 17
+    assert created.create_side_by_side is False
+    assert source_config.read_text(encoding="utf-8") == original_config
     assert all(path.is_dir() for path in (
         followup_root / "00_INBOX",
         followup_root / "01_RAW",
@@ -555,40 +566,221 @@ def test_cli_setup_creates_config_and_followup_folders(tmp_path, capsys):
     assert "Created" in capsys.readouterr().out
 
 
-def test_cli_setup_uses_config_json_by_default(tmp_path, monkeypatch):
+def test_cli_setup_creates_config_in_followup_root_by_default(tmp_path, monkeypatch):
     followup_root = tmp_path / "default config followup"
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["--setup", str(followup_root)]) == 0
 
-    assert Path("config.json").is_file()
-    assert cfgmod.load(Path("config.json")).followup_root == followup_root.resolve()
+    config_path = followup_root / "config.json"
+    assert config_path.is_file()
+    assert not (tmp_path / "config.json").exists()
+    assert cfgmod.load(config_path).followup_root == followup_root.resolve()
 
 
-def test_cli_setup_declines_overwrite_without_creating_folders(tmp_path, capsys, monkeypatch):
+def test_cli_reads_default_config_from_current_followup_directory(tmp_path, monkeypatch):
+    followup_root = tmp_path / "followup"
+    assert cli.main(["--setup", str(followup_root)]) == 0
+    monkeypatch.chdir(followup_root)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    monkeypatch.setattr(cli, "matching_video_files", lambda _: [])
+
+    assert cli.main(["--dry-run"]) == 0
+
+
+def test_cli_config_path_overrides_default_config_location(tmp_path, monkeypatch):
+    followup_root = tmp_path / "followup"
+    original_root = tmp_path / "original-root"
+    (original_root / "00_INBOX").mkdir(parents=True)
+    source_config = tmp_path / "parent" / "config.json"
+    source_config.parent.mkdir()
+    source_config.write_text(json.dumps({"followup_root": str(original_root)}), encoding="utf-8")
+    destination_config = followup_root / "config.json"
+    assert cli.main(["--setup", str(followup_root), "--config_path", str(source_config)]) == 0
+    assert destination_config.is_file()
+    assert cfgmod.load(destination_config).followup_root == followup_root.resolve()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    observed_roots = []
+    monkeypatch.setattr(cli, "matching_video_files", lambda cfg: observed_roots.append(cfg.followup_root) or [])
+
+    assert cli.main(["--config-path", str(source_config), "--dry-run"]) == 0
+    assert observed_roots == [original_root]
+
+
+@pytest.mark.parametrize("explicit_directory", [False, True])
+def test_cli_runs_in_selected_directory(tmp_path, monkeypatch, explicit_directory):
+    followup_root = tmp_path / "followup with spaces"
+    (followup_root / "00_INBOX").mkdir(parents=True)
+    (followup_root / "config.json").write_text(
+        json.dumps({"followup_root": str(tmp_path / "old location")}), encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path if explicit_directory else followup_root)
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    observed_roots = []
+
+    def preview(cfg, *args):
+        observed_roots.append(cfg.followup_root)
+        return "No work", False, Summary()
+
+    monkeypatch.setattr(cli, "preflight_inventory", preview)
+    args = [followup_root.name] if explicit_directory else []
+    assert cli.main(args) == 0
+    assert observed_roots == [followup_root.resolve()]
+    assert cfgmod.load(followup_root / "config.json").followup_root == tmp_path / "old location"
+
+
+@pytest.mark.parametrize("config_option", ["--config", "--config-path", "--config_path"])
+@pytest.mark.parametrize("directory_kind", ["current", "existing", "missing"])
+def test_cli_external_config_overrides_directory(tmp_path, monkeypatch, config_option, directory_kind):
+    configured_root = tmp_path / "configured followup"
+    (configured_root / "00_INBOX").mkdir(parents=True)
+    working_directory = tmp_path / "working directory"
+    working_directory.mkdir()
+    (working_directory / "config.json").write_text("invalid local config", encoding="utf-8")
+    monkeypatch.chdir(working_directory)
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({
+        "followup_root": str(configured_root), "stability_minutes": 17,
+    }), encoding="utf-8")
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    observed = []
+    monkeypatch.setattr(cli, "matching_video_files",
+                        lambda cfg: observed.append((cfg.followup_root, cfg.stability_minutes)) or [])
+    directory_args = ([] if directory_kind == "current"
+                      else [str(working_directory if directory_kind == "existing"
+                                else tmp_path / "missing directory")])
+    assert cli.main(directory_args + [config_option, str(source_config), "--dry-run"]) == 0
+    assert observed == [(configured_root.resolve(), 17)]
+
+
+@pytest.mark.parametrize("contents", [
+    None, "{", "[]", "null", "{}", '{"followup_root": 42}',
+    '{"followup_root": ".", "sync": []}',
+    '{"followup_root": ".", "unknown_setting": true}',
+])
+@pytest.mark.parametrize("explicit_directory", [False, True])
+def test_cli_rejects_missing_or_invalid_directory_config(
+        tmp_path, monkeypatch, capsys, contents, explicit_directory):
+    monkeypatch.chdir(tmp_path)
+    if contents is not None:
+        (tmp_path / "config.json").write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(cli.media, "check_tools",
+                        lambda _: pytest.fail("Tool checks must not run with invalid config"))
+    assert cli.main([str(tmp_path)] if explicit_directory else []) == 3
+    assert "CONFIG ERROR:" in capsys.readouterr().err
+    assert not (tmp_path / "99_LOGS_QC").exists()
+
+
+def test_cli_rejects_invalid_run_directory(tmp_path, capsys):
+    assert cli.main([str(tmp_path / "missing")]) == 3
+    assert "Run directory" in capsys.readouterr().err
+
+
+def test_cli_rejects_directory_as_config_file(tmp_path, capsys):
+    (tmp_path / "config.json").mkdir()
+    assert cli.main([str(tmp_path)]) == 3
+    assert "Cannot read config file" in capsys.readouterr().err
+
+
+def test_cli_rejects_non_utf8_config(tmp_path, capsys):
+    (tmp_path / "config.json").write_bytes(b"\xff")
+    assert cli.main([str(tmp_path)]) == 3
+    assert "not valid UTF-8" in capsys.readouterr().err
+
+
+def test_cli_rejects_directory_combined_with_setup(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main([str(tmp_path), "--setup", str(tmp_path)])
+    assert exc.value.code == 2
+    assert "cannot be combined with --setup" in capsys.readouterr().err
+
+
+def test_cli_setup_declines_overwrite_without_changing_destination(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
-    config_path.write_text('{"followup_root": "preserve this"}', encoding="utf-8")
-    before = config_path.read_text(encoding="utf-8")
+    followup_root.mkdir()
+    destination_config = followup_root / "config.json"
+    destination_config.write_text('{"followup_root": "preserve this"}', encoding="utf-8")
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({"followup_root": str(followup_root)}), encoding="utf-8")
+    before = destination_config.read_text(encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda _: "no")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 1
+    assert cli.main(["--setup", str(followup_root), "--config-path", str(source_config)]) == 1
 
-    assert config_path.read_text(encoding="utf-8") == before
-    assert not followup_root.exists()
+    assert destination_config.read_text(encoding="utf-8") == before
+    assert not (followup_root / "00_INBOX").exists()
     assert "Setup cancelled" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("contents", [
+    "[]", "null", '{"sync": []}', '{"encode": null}',
+    '{"mom_pattern": 42}', '{"video_extensions": null}', "{",
+])
+def test_cli_setup_rejects_invalid_source_without_creating_destination(tmp_path, capsys, contents):
+    source = tmp_path / "source.json"
+    source.write_text(contents, encoding="utf-8")
+    destination = tmp_path / "new followup"
+    assert cli.main(["--setup", str(destination), "--config-path", str(source)]) == 3
+    assert "SETUP ERROR:" in capsys.readouterr().err
+    assert not destination.exists()
+    assert source.read_text(encoding="utf-8") == contents
+
+
+@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("has_work", [False, True])
+def test_cli_respects_active_locks_and_recovers_stale_locks(tmp_path, monkeypatch, stale, has_work):
+    root = tmp_path / "followup"
+    (root / "00_INBOX").mkdir(parents=True)
+    config_path = root / "config.json"
+    config_path.write_text(json.dumps({"followup_root": str(root)}), encoding="utf-8")
+    cfg = cfgmod.load(config_path)
+    cfg.lock_file.parent.mkdir(parents=True)
+    cfg.lock_file.write_text("foreign lock", encoding="utf-8")
+    if stale:
+        old = datetime.now().timestamp() - 48 * 3600
+        os.utime(cfg.lock_file, (old, old))
+    monkeypatch.setattr(cli.media, "check_tools", lambda _: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda *args: None)
+    monkeypatch.setattr(cli, "preflight_inventory", lambda *args: ("Report", has_work, Summary()))
+    approvals = []
+    monkeypatch.setattr(cli, "request_approval", lambda: approvals.append(True) or True)
+    runs = []
+
+    def process(self):
+        assert self.cfg.lock_file.exists()
+        assert "foreign lock" not in self.cfg.lock_file.read_text(encoding="utf-8")
+        runs.append(True)
+        return Summary()
+
+    monkeypatch.setattr(Pipeline, "run", process)
+    assert cli.main(["--config-path", str(config_path)]) == (0 if stale else 3)
+    assert approvals == ([True] if stale and has_work else [])
+    assert runs == ([True] if stale and has_work else [])
+    if stale:
+        assert not cfg.lock_file.exists()
+    else:
+        assert cfg.lock_file.read_text(encoding="utf-8") == "foreign lock"
 
 
 def test_cli_setup_confirms_overwrite_then_creates_folders(tmp_path, capsys, monkeypatch):
     followup_root = tmp_path / "new followup"
-    config_path = tmp_path / "config.json"
-    config_path.write_text('{"followup_root": "old path"}', encoding="utf-8")
+    followup_root.mkdir()
+    destination_config = followup_root / "config.json"
+    destination_config.write_text('{"followup_root": "old path"}', encoding="utf-8")
+    source_config = tmp_path / "source.json"
+    source_config.write_text(json.dumps({"followup_root": "source root", "stability_minutes": 9}), encoding="utf-8")
     monkeypatch.setattr("builtins.input", lambda _: "yes")
 
-    assert cli.main(["--setup", str(followup_root), "--config", str(config_path)]) == 0
+    assert cli.main(["--setup", str(followup_root), "--config", str(source_config)]) == 0
 
-    created = cfgmod.load(config_path)
+    created = cfgmod.load(destination_config)
     assert created.followup_root == followup_root.resolve()
+    assert created.stability_minutes == 9
     assert all(path.is_dir() for path in (
         followup_root / "00_INBOX",
         followup_root / "01_RAW",

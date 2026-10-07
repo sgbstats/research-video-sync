@@ -1,6 +1,6 @@
 # Beginner's guide: running the video-sync tool from the command line
 
-This guide is for Windows users who want to run the video-sync pipeline from a terminal after getting its code from GitHub. The production tool is `pipeline_rg2019.py`. **Do not run the `.sh` scripts**; they are legacy scripts and are not for the current workflow.
+This guide is for Windows users who want to run the video-sync pipeline from a terminal after getting its code from GitHub. The production command is `research-video-sync`; `pipeline_rg2019.py` remains available for compatibility. **Do not run the `.sh` scripts**; they are legacy scripts and are not for the current workflow.
 
 The pipeline moves original videos from `00_INBOX` into `01_RAW`, then creates synchronized outputs under `02_SYNCED`. Treat a real run as a file operation, not just a preview.
 
@@ -45,24 +45,32 @@ If the repository is **already cloned**, do not clone it again; open Command Pro
 
 ## 3. Install the Python packages
 
-From the repository folder, run:
+From the repository folder, install the package and its dependencies:
 
 ```bat
-python -m pip install -r requirements.txt
+python -m pip install .
 ```
 
-This installs the required NumPy and SciPy packages. If `python` is not recognized but the Python launcher is installed, try using `py` in place of `python` in the commands in this guide.
+This installs the `research-video-sync` command and required packages. If `ffmpeg` or
+`ffprobe` is not on `PATH`, their platform binaries are downloaded on first use. If
+`python` is not recognized but the Python launcher is installed, try using `py` in place
+of `python` in the commands in this guide.
 
 ## 4. Set up your configuration
 
 Create a local configuration and the default follow-up folder structure in one step:
 
 ```bat
-python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+cd /d "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 notepad config.json
 ```
 
-`--setup` copies the project defaults into `config.json`, sets `followup_root` to the supplied path, and creates the configured folders if missing. An absolute path is recommended. If the config already exists, setup asks before replacing it; answering `yes` continues folder creation, while any other response cancels without changes. You can choose a different config destination with `--config`, for example `python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026" --config "D:\settings\rg2019.json"`.
+`--setup` creates `config.json` inside the supplied follow-up directory, sets `followup_root` to that path, and creates the configured folders if missing. By default it uses the packaged example config. If `--config-path SOURCE` is provided, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source remains unchanged. `--config` and `--config_path` are aliases. If the destination config already exists, setup asks before replacing it; answering `yes` continues setup, while any other response cancels without changes.
+
+Run `research-video-sync` alone to process the current directory using its `config.json`, or run `research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"` to process that directory using its config. Add `--dry-run` to preview either command. The selected directory becomes `followup_root` for that run without editing the config file. A missing, unreadable, or invalid config produces `CONFIG ERROR` and exit code `3` before processing; initialize it with `--setup DIRECTORY` if needed.
+
+During a normal run, `--config-path PATH` and its aliases take precedence over the current working directory and any directory argument: they load the specified config and use its configured `followup_root`. Relative config paths are resolved from the current working directory.
 
 If setting up manually instead, set `followup_root` in `config.json` to the full path of your actual project data folder. For example:
 
@@ -92,11 +100,11 @@ The keys below are the complete set accepted by the current Python pipeline. Def
 | `child_pattern` | `_child` | Case-insensitive substring marking a child video; must differ from `mom_pattern`. |
 | `video_description` | `null` | Optional filename label inserted after the ID for both synchronized videos and optional side-by-side output. A non-null label may contain letters, digits, single spaces, `_` or `-` between alphanumeric segments (maximum 80 characters); spaces become underscores. Changing it for completed pairs requires `--reprocess`. |
 | `video_extensions` | `[".mp4", ".avi", ".mov", ".mkv"]` | Accepted source extensions; matching is case-insensitive. |
-| `create_side_by_side` | `false` | Also create `<ID>[_description]_side_by_side.mp4`. Enable before processing or use `--reprocess` for completed pairs. |
+| `create_side_by_side` | `true` | Also create `<ID>[_description]_side_by_side.mp4` (large). Disable it before processing if this extra output is not wanted. |
 | `require_approval` | `true` | Prompt for `yes` on real runs with eligible videos. A report with no eligible videos does not prompt. Set to `false` for unattended runs. |
 | `require_ready_marker` | `false` | Require a `READY.txt` marker for incoming material when enabled. |
 | `ready_marker_name` | `READY.txt` | Name of that marker file. |
-| `stability_minutes` | `120` | Minimum source-file age and unchanged prior-observation interval; `0` disables those two checks only. |
+| `stability_minutes` | `0` | Minimum source-file age and unchanged prior-observation interval; `0` disables those two checks only. |
 | `stability_recheck_seconds` | `5` | Pause, then check again for additions, removals or file changes; remains active when `stability_minutes` is `0`. Use `0` to disable this recheck. |
 | `stability_requires_prior_observation` | `true` | With positive `stability_minutes`, require a previous real-run observation of the unchanged files. Dry runs never save observations. |
 | `max_attempts` | `3` | Maximum automatic retries for sync/encode failures before manual reprocessing. |
@@ -146,23 +154,23 @@ For WCHADS data, change the config.json to:
 Always start with a dry run:
 
 ```bat
-python pipeline_rg2019.py --config config.json --dry-run
+research-video-sync --config config.json --dry-run
 ```
 
 Read the output and make sure the folders and participant videos it identifies are the ones you expect. A dry run does not create folders or write state; it lists matching videos and reports those waiting for stability. A real run prints a pre-run inventory of source videos to sync and those skipped or blocked (including missing/ambiguous matches, unsupported suffixes, and already-synced participants). When videos are eligible and `require_approval` is `true`, it requires you to type `yes` before processing. Any other response cancels and returns exit code `1`.
 If no videos are eligible to sync, the real-run command prints the report and exits without requesting approval or starting full processing. This includes pairs waiting for stability; first observations are recorded so a later run can recheck them. Review problems still return exit code `2`.
 
-With the default settings, a new participant can remain in a waiting status during a dry run. That is expected: the default stability check requires a prior **real** run to have observed the files unchanged. Repeating dry runs will not satisfy that check because dry runs do not save observations. The README explains how to do a one-off pilot dry run without changing files.
+When `stability_minutes` is set above `0` and prior observation is required, a new participant can remain in a waiting status during a dry run. That is expected: the stability check requires a prior **real** run to have observed the files unchanged. Repeating dry runs will not satisfy that check because dry runs do not save observations. The README explains how to do a one-off pilot dry run without changing files.
 
 ## 6. Run the pipeline
 
 Only after reviewing the dry-run output, start a real run:
 
 ```bat
-python pipeline_rg2019.py --config config.json
+research-video-sync --config config.json
 ```
 
-The pipeline waits until incoming files appear stable. With the default configuration, files must be at least 120 minutes old and must have been observed unchanged during an earlier real run; consequently, a new participant will normally wait until a later run. Transfer-in-progress files also block processing.
+The default `stability_minutes=0` disables the minimum-age and prior-observation checks. Transfer-in-progress files and the short growth re-check still block processing if files are arriving or changing. Set `stability_minutes` above `0` if you also want a minimum file age and the prior-observation interval.
 
 The pipeline accepts pairs directly in `00_INBOX` or in nested folders. Each participant ID needs exactly one `_mom` and one `_child` video in the same folder; the ID comes from the filenames or, if absent there, the folder path. Multiple ID pairs may share a folder. Source folders are preserved in `01_RAW` and `02_SYNCED`; status and logs are recorded under `99_LOGS_QC`. **Do not edit files in `01_RAW`.**
 
@@ -172,23 +180,24 @@ Replace `ID100392` with the participant ID you intend to process.
 
 | What you want to do | Example |
 |---|---|
-| Process only one participant | `python pipeline_rg2019.py --config config.json --participant ID100392` |
-| Preview one participant | `python pipeline_rg2019.py --config config.json --participant ID100392 --dry-run` |
-| Reprocess a participant from `01_RAW` | `python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392` |
-| Show more diagnostic detail | `python pipeline_rg2019.py --config config.json --log-level DEBUG` |
-| Skip approval and the stability-minute wait for this run | `python pipeline_rg2019.py --config config.json --yolo` |
-| Use a manually reviewed offset | `python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34` |
+| Process only one participant | `research-video-sync --config config.json --participant ID100392` |
+| Preview one participant | `research-video-sync --config config.json --participant ID100392 --dry-run` |
+| Reprocess a participant from `01_RAW` | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392` |
+| Show more diagnostic detail | `research-video-sync --config config.json --log-level DEBUG` |
+| Skip approval and the stability-minute wait for this run | `research-video-sync --config config.json --yolo` |
+| Use a manually reviewed offset | `research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34` |
 
 Reprocessing archives known previous outputs under a `_superseded_...` folder rather than deleting them. A manual offset should only be used after reviewing the videos and deciding the correct offset. It requires exactly one `--participant`; a positive offset trims the mother video, and a negative offset trims the child video. See the README for the full command and details.
 `--yolo` still prints the report and retains transfer-file blocking, the growth re-check, and the run lock; it does not change your saved config. With `--dry-run`, it remains read-only.
 
 ### CLI option reference
 
-These are all command-line options supported by `pipeline_rg2019.py`:
+These are all command-line options supported by `research-video-sync`:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--config PATH` | `config.json` | Load this JSON configuration; with `--setup`, write the generated configuration here. |
+| `DIRECTORY` (positional) | Current directory | Unless a config option is supplied, process this directory using its `config.json`, overriding `followup_root` for this run. Cannot be combined with `--setup`. |
+| `--config-path PATH` (`--config`, `--config_path`) | Run: `config.json` in the selected directory. Setup: packaged example copied to `FOLLOWUP_ROOT/config.json`. | On setup, copy settings from `PATH` into the target config. On a normal run, load `PATH` directly and use its `followup_root`, overriding the current directory and any `DIRECTORY` argument. |
 | `--setup FOLLOWUP_ROOT` | Not set | Initialize a config and its folders, then exit. Existing configs require confirmation before overwrite. |
 | `--dry-run` | Off | Preview decisions without moving files, writing state or encoding. It does not satisfy prior-observation stability. |
 | `--yolo` | Off | For this invocation, set `stability_minutes=0` and skip approval. Transfer-file blocking, the configured recheck and locking remain. Combining with `--dry-run` stays read-only. |
@@ -208,7 +217,7 @@ Common problems:
 | Message or situation | What to check |
 |---|---|
 | `ffmpeg was not found` | Install FFmpeg or set full paths for `ffmpeg` and `ffprobe` in `config.json`. |
-| Participant stays in a waiting status | Check `pipeline_status.csv` and the log. Waiting on a new participant is expected with the default prior-observation setting. |
+| Participant stays in a waiting status | Check `pipeline_status.csv` and the log. If `stability_minutes` is positive, review the age and prior-observation settings; transfer-file blocking and the growth re-check remain active at `0`. |
 | `MISSING_FILES` or `AMBIGUOUS_FILES` | Confirm there is exactly one `_mom` video and one `_child` video in the participant's inbox folder. |
 | `LOW_CONFIDENCE` | Review the recordings and status details; do not assume the estimated offset is correct. See the README before reprocessing or using a manual offset. |
 | `PROMOTE_FAILED` | A file may be locked by another program. Close it and run the pipeline again. `00_INBOX` and `01_RAW` must be on the same volume. |

@@ -118,8 +118,10 @@ def test_config_rejects_non_boolean_approval(tmp_path):
 def test_example_config_loads_and_contains_no_real_paths():
     p = Path(__file__).resolve().parents[1] / "config.example.json"
     cfg = cfgmod.load(p)
-    assert cfg.create_side_by_side is False and cfg.require_ready_marker is False
-    assert cfg.stability_minutes == 120
+    assert cfg.create_side_by_side is True and cfg.require_ready_marker is False
+    assert cfg.stability_minutes == 0
+    defaults = cfgmod.from_dict({"followup_root": p.parent})
+    assert defaults.stability_minutes == 0 and defaults.create_side_by_side is True
     assert cfg.video_description is None and cfg.require_approval is True
 
 

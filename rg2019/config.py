@@ -56,10 +56,10 @@ class Config:
     video_extensions: list[str] = field(default_factory=lambda: [".mp4", ".avi", ".mov", ".mkv"])
     require_ready_marker: bool = False
     ready_marker_name: str = "READY.txt"
-    stability_minutes: float = 120.0
+    stability_minutes: float = 0.0
     stability_recheck_seconds: float = 5.0
     stability_requires_prior_observation: bool = True
-    create_side_by_side: bool = False
+    create_side_by_side: bool = True
     require_approval: bool = True
     max_attempts: int = 3               # automatic retries for SYNC_FAILED / ENCODE_FAILED
     lock_stale_hours: float = 24.0
@@ -119,6 +119,17 @@ def from_dict(data: dict[str, Any], path_cls: type[PurePath] = Path) -> Config:
 
     `path_cls` exists so tests can exercise Windows path semantics (PureWindowsPath) on any OS.
     """
+    if not isinstance(data, dict):
+        raise ConfigError("Config must be a JSON object")
+    try:
+        return _from_dict(data, path_cls)
+    except ConfigError:
+        raise
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ConfigError(f"Invalid config settings: {exc}") from exc
+
+
+def _from_dict(data: dict[str, Any], path_cls: type[PurePath]) -> Config:
     data = dict(data)
     if "followup_root" not in data:
         raise ConfigError("'followup_root' is required")
@@ -160,6 +171,13 @@ def load(path: Path) -> Config:
         data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except FileNotFoundError as exc:
         raise ConfigError(f"Config file not found: {path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Cannot read config file ({path}): {exc}") from exc
     except json.JSONDecodeError as exc:
         raise ConfigError(f"Config file is not valid JSON ({path}): {exc}") from exc
-    return from_dict(data)
+    except UnicodeError as exc:
+        raise ConfigError(f"Config file is not valid UTF-8 ({path}): {exc}") from exc
+    try:
+        return from_dict(data)
+    except ConfigError as exc:
+        raise ConfigError(f"Invalid config settings ({path}): {exc}") from exc

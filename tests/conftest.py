@@ -7,6 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+    import static_ffmpeg
+
+    static_ffmpeg.add_paths()
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -52,6 +57,7 @@ def cfg(project):
     return cfgmod.from_dict({
         "followup_root": str(project),
         "stability_minutes": 0, "stability_recheck_seconds": 0,
+        "create_side_by_side": False,
         "sync": {"max_lag_seconds": 30, "window_seconds": 10, "coarse_windows": 7, "fine_windows": 5,
                  "fine_search_seconds": 1.0},
         "encode": {"preset": "ultrafast", "crf": 30},

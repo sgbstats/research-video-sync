@@ -3,13 +3,89 @@
 Audio-based synchronisation of the two camera recordings (mother / child) of the RG2019 follow-up
 study, designed for a **Synology-Drive-synchronised project folder** on a private Windows workstation.
 
-> **Production = `pipeline_rg2019.py` (v2, Python).**
+> **Production = the installable `research-video-sync` command (v2).** The `rg2019` Python module and `pipeline_rg2019.py` script remain available for compatibility.
 > `sync_research_project.sh` and `sync_videos.sh` are **LEGACY**, kept only for history. Do **not** use them
 > on the NAS workflow: they write markers inside participant folders, trim the wrong camera
 > (`sync_videos.sh`), and abort after the first participant (`set -e`). See [docs/LEGACY_AUDIT.md](docs/LEGACY_AUDIT.md).
 > The two HTML guides describe that legacy workflow.
 
-## 1. Architecture
+## 1. Prerequisites and installation
+
+For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COMMAND_LINE_GUIDE.md).
+For unattended daily runs on Windows, see the [Task Scheduler guide](docs/WINDOWS_TASK_SCHEDULER.md).
+
+* Windows 10/11 or Linux, Python >= 3.10.
+* `ffmpeg` and `ffprobe` with libx264 and AAC. When the default names `ffmpeg` and `ffprobe`
+  are not found on `PATH`, the `static-ffmpeg` dependency downloads the missing tools'
+  platform binaries on first use; this needs an internet connection but does not require
+  administrator privileges. Explicitly configured executable names or paths must exist;
+  a missing custom executable produces an error and is never silently replaced.
+
+Install from a source checkout (recommended until a release is published to PyPI):
+
+```powershell
+git clone https://github.com/sgbstats/research-video-sync.git
+cd research-video-sync
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+On Linux, create and activate the virtual environment with:
+
+```bash
+git clone https://github.com/sgbstats/research-video-sync.git
+cd research-video-sync
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
+```
+
+After a release is published to PyPI, the module can also be installed without cloning the repository:
+
+```bash
+python -m pip install research-video-sync
+```
+
+Then initialize the machine-specific configuration and folder layout (PowerShell example):
+
+```powershell
+research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+Set-Location "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+notepad config.json
+```
+
+The installed `research-video-sync` command and `python -m rg2019` are equivalent. The
+`pipeline_rg2019.py` script remains available for existing scheduled tasks.
+
+`--setup` creates `config.json` inside the target follow-up directory, sets `followup_root`, and creates the configured folder layout. By default, setup uses the packaged example config. If `--config-path SOURCE` is supplied, its settings are copied into the target's `config.json` (with `followup_root` set to the target); the source file is left unchanged. `--config` and `--config_path` are aliases. If a destination config already exists, setup asks before replacing it.
+
+Run without arguments to process the current directory, or pass a directory path to process that directory:
+
+```powershell
+research-video-sync
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
+```
+
+These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` takes precedence over both the current working directory and any directory argument: it loads the specified config and uses its configured `followup_root`. Relative config paths are resolved from the current working directory.
+
+`config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
+
+### v2 upgrade notes
+
+The processing defaults intentionally changed at the user's request: `stability_minutes`
+is now `0` rather than `120`, and `create_side_by_side` is now `true` rather than `false`.
+This affects both new configs and existing configs that omit these keys; explicitly saved
+values are retained. The zero-minute default disables the minimum-age and prior-observation
+wait, but keeps transfer-file blocking and the growth re-check. Side-by-side output adds an
+extra encode and requires additional processing time and disk space. To preserve the previous
+behavior, explicitly set `"stability_minutes": 120` and `"create_side_by_side": false` before
+upgrading.
+
+## 2. Architecture
 
 ```
 FOLLOWUP_2026/                      <- followup_root (whole tree synced to the Synology NAS)
@@ -50,25 +126,6 @@ Daily flow per participant:
 * This is protection *by program design*. For protection *by the operating system*, also make `01_RAW` read-only
   for everyone else (NAS/Synology permissions; the shared PC should only ever have read access to RAW).
 
-## 2. Prerequisites and installation
-
-For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COMMAND_LINE_GUIDE.md).
-
-* Windows 10/11 (developed/tested on Linux; all paths use `pathlib`), Python >= 3.10.
-* `ffmpeg` and `ffprobe` (with libx264 and aac) installed; checked at start-up.
-* `pip install -r requirements.txt` (numpy, scipy). Tests: `pip install -r requirements-dev.txt`.
-
-```bat
-cd C:\RG2019\research-video-sync
-python -m pip install -r requirements.txt
-python pipeline_rg2019.py --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
-notepad config.json
-```
-
-`--setup` creates a local `config.json` from the example settings, sets `followup_root`, and creates the configured folder layout. An absolute follow-up path is recommended. If a config already exists, setup asks before replacing it.
-
-`config.json` is git-ignored (machine-specific). Only `config.example.json` (fake paths) is committed.
-
 ## 3. Configuration (`config.json`)
 
 | Key | Default | Meaning |
@@ -79,16 +136,16 @@ notepad config.json
 | `mom_pattern`, `child_pattern` | `_mom`, `_child` | case-insensitive substring of the file name |
 | `video_extensions` | mp4, avi, mov, mkv | |
 | `require_ready_marker` | `false` | if `true`, `00_INBOX/IDxxxx/READY.txt` must exist |
-| `stability_minutes` | `120` | age rule + prior-observation timer (see below). `0` disables **only those two**: transfer-file blocking and the growth re-check stay active |
+| `stability_minutes` | `0` | age rule + prior-observation timer (see below). `0` disables **only those two**: transfer-file blocking and the growth re-check stay active |
 | `stability_recheck_seconds` | `5` | re-stat files after this pause to catch files still growing; active **even when `stability_minutes` is `0`** (set this to `0` to switch it off) |
 | `stability_requires_prior_observation` | `true` | files must also have been seen unchanged by a *previous run* (see below) |
-| `create_side_by_side` | **`false`** | also create `IDxxxx_side_by_side.mp4` (large) |
+| `create_side_by_side` | **`true`** | also create `IDxxxx_side_by_side.mp4` (large) |
 | `video_description` | `null` | optional filename-safe label; `"pilot visit"` produces `IDxxxx_pilot_visit_mom_synced.mp4` (and labels child and side-by-side outputs) |
 | `require_approval` | `true` | require typing `yes` after the pre-run report on real runs |
 | `max_attempts` | `3` | automatic retries for `SYNC_FAILED`/`ENCODE_FAILED` |
 | `sync.*` | see file | sample rate (8000 Hz), `max_lag_seconds` (120), window length (60 s), thresholds; `min_agreeing_windows` must not exceed `fine_windows` |
 | `encode.*` | `fast`, CRF 20, 192k | x264 preset/CRF, AAC bitrate, `copy_untrimmed_when_possible` |
-| `ffmpeg`, `ffprobe` | `ffmpeg`, `ffprobe` | names on `PATH` or absolute paths |
+| `ffmpeg`, `ffprobe` | `ffmpeg`, `ffprobe` | names on `PATH`, managed fallback, or absolute paths |
 
 Unknown keys are rejected (typo protection).
 
@@ -96,10 +153,10 @@ Unknown keys are rejected (typo protection).
 
 ```bat
 :: 1) ALWAYS start with a dry run: nothing is moved, encoded, written or deleted
-python pipeline_rg2019.py --config config.json --dry-run
+research-video-sync --config config.json --dry-run
 
 :: 2) real run (this is what the scheduled task does)
-python pipeline_rg2019.py --config config.json
+research-video-sync --config config.json
 ```
 
 Other options: `--setup FOLLOWUP_ROOT` (create config and folder structure), `--participant IDxxxx` (repeatable; restrict to those IDs), `--reprocess IDxxxx`, `--manual-offset SECONDS`, `--yolo` (skip approval and set stability minutes to zero for this invocation),
@@ -113,8 +170,8 @@ Daily scheduling: [docs/WINDOWS_TASK_SCHEDULER.md](docs/WINDOWS_TASK_SCHEDULER.m
 prints the exact steps that *would* happen. It does not hash, move, extract audio, encode, or write state/CSV/log files.
 (It also cannot know the sync offset before audio analysis, so it reports the encode step generically.)
 
-> **Dry-run and the prior-observation timer.** With the default `stability_requires_prior_observation=true` and
-> `stability_minutes>0`, a new participant must first be *seen unchanged by a previous real run*. A dry-run deliberately
+> **Dry-run and the prior-observation timer.** When `stability_minutes>0` and
+> `stability_requires_prior_observation=true`, a new participant must first be *seen unchanged by a previous real run*. A dry-run deliberately
 > writes no state, so it can never record that first observation: repeated dry-runs will keep reporting new participants
 > as waiting ("first observation ..."). The pipeline prints a warning (and repeats it in the summary) when this applies.
 > For a **one-off full pilot dry-run**, temporarily set `"stability_requires_prior_observation": false` in your config -
@@ -131,8 +188,8 @@ For a participant in INBOX the pipeline waits (`WAITING_FOR_READY` / `WAITING_FO
 3. only if `stability_minutes>0`: no file was modified in the last `stability_minutes`;
 4. only if `stability_minutes>0` and `stability_requires_prior_observation`: the same file list/sizes/mtimes were already recorded
    by an earlier real run at least `stability_minutes` ago - Synology Drive preserves the original file mtime, so mtime alone
-   cannot show that a download just finished. **With the defaults a new participant is therefore first *seen* on one run and
-   processed on a later run (normally the next day).** Set it to `false` to accept same-day processing using the other rules;
+   cannot show that a download just finished. When this rule is enabled, a new participant is first *seen* on one run and
+   processed on a later run (normally the next day). Set it to `false` to accept same-day processing using the other rules;
 5. **always while `stability_recheck_seconds>0`** (default 5, also when `stability_minutes=0`): the list of files, their sizes and
    mtimes are identical after that pause (files that *appear or disappear* during the pause count as changes), so a file that is
    still growing or arriving is caught. This is the safer behaviour; set `stability_recheck_seconds`
@@ -201,11 +258,11 @@ Assumption: a **constant** offset (no clock-drift correction).
 
 ```bat
 :: what would happen?
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --dry-run
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --dry-run
 :: recompute from RAW (previous outputs are MOVED to 02_SYNCED\ID100392\_superseded_<timestamp>\, never deleted)
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392
 :: accept a reviewed offset for a LOW_CONFIDENCE participant (positive trims mom, negative trims child)
-python pipeline_rg2019.py --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34
+research-video-sync --config config.json --participant ID100392 --reprocess ID100392 --manual-offset 12.34
 ```
 
 To re-run after fixing a problem that is not a sync problem (e.g. a moved conflicting file) no flag is needed.
@@ -217,10 +274,10 @@ synced videos on the next run; if it exists but differs from the recorded size i
 
 ## 7. Troubleshooting
 
-* *`ffmpeg was not found`* - use absolute paths in `config.json` (scheduled tasks often lack your `PATH`).
-* *Participant stays in WAITING in every dry-run* - expected with the default prior-observation rule (dry-run cannot record it); see the dry-run note above.
-* *Participant stays in WAITING* - read the message in `pipeline_status.csv` (`error_message`) or the log; with the default
-  settings the first sighting always waits. Lower `stability_minutes`, or set `stability_requires_prior_observation=false`.
+* *`ffmpeg was not found`* - check the configured executable names/absolute paths and internet access
+  for the first managed-binary download (scheduled tasks often have a limited `PATH`).
+* *Participant stays in WAITING in every dry-run* - if `stability_minutes>0` and prior observation is required, dry-runs cannot record the observation; see the dry-run note above.
+* *Participant stays in WAITING* - read the message in `pipeline_status.csv` (`error_message`) or the log; check for transfer-in-progress files and the growth re-check, which remain active when `stability_minutes=0`. If age/prior-observation checks are enabled, adjust `stability_minutes` or set `stability_requires_prior_observation=false`.
 * *`another pipeline run appears to be active`* - a run is in progress or crashed. A live run refreshes the lock's modified time
   every minute (heartbeat), so a long batch is never taken over, however long it runs. A lock whose heartbeat stopped
   (crashed run) is replaced automatically after `lock_stale_hours`; otherwise delete `99_LOGS_QC\pipeline.lock` once you are sure
@@ -232,12 +289,20 @@ synced videos on the next run; if it exists but differs from the recorded size i
 ## 8. Development and tests
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest            # ~1.5 min; needs ffmpeg; uses only synthetic media generated on the fly
+python -m pip install -e ".[test]"
+python -m pytest            # uses only synthetic media generated on the fly
+python -m build             # build source and wheel distributions
 ```
 
-Layout: `pipeline_rg2019.py` (CLI), `rg2019/` (`config`, `discovery`, `media`, `syncest`, `state`, `pipeline`, `statuses`),
-`tests/`, `docs/`. **Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
+The test extra includes the build backend requirements (`setuptools>=68` and `wheel`)
+because the wheel compatibility test builds without an isolated environment.
+
+GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10 and 3.13 on
+Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
+trusted publisher on PyPI for the repository and `pypi` environment before publishing.
+
+Layout: `research-video-sync` (installed command), `rg2019/` (Python module), `pipeline_rg2019.py` (compatibility entry point), `tests/`, `docs/`.
+**Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
 logs, participant folders, pipeline state and local configs. Tests never read real study files.
 
 ## 9. Assumptions and known limits

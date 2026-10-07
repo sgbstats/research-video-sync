@@ -11,6 +11,7 @@ trimmed, by |s_c - s_m|, so both files begin at the same real-world event.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -99,7 +100,8 @@ def test_legacy_sync_videos_script_trims_wrong_camera(tmp_path, label, ms, cs):
     assert trimmed != correct_trim(ms, cs)
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="requires POSIX bash argument handling")
 def test_legacy_bash_set_e_post_increment_from_zero_aborts():
     """Bash `set -e` + `((COUNTER++))`: the arithmetic command's exit status is 1 when the
     expression evaluates to 0, and post-increment evaluates to the OLD value (0 on first use).

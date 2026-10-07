@@ -1,0 +1,46 @@
+{
+  "_comment": "EXAMPLE ONLY - copy to config.json (git-ignored) and edit. Paths below are fake.",
+  "followup_root": "D:\\RG2019_CAMERAS\\FOLLOWUP_2026",
+  "inbox": "00_INBOX",
+  "raw": "01_RAW",
+  "synced": "02_SYNCED",
+  "logs_qc": "99_LOGS_QC",
+
+  "participant_id_regex": "^ID\\d{4,8}$",
+  "mom_pattern": "_mom",
+  "child_pattern": "_child",
+  "video_description": null,
+
+  "create_side_by_side": true,
+  "require_approval": true,
+  "video_extensions": [".mp4", ".avi", ".mov", ".mkv"],
+
+  "require_ready_marker": false,
+  "ready_marker_name": "READY.txt",
+  "stability_minutes": 0,
+  "stability_recheck_seconds": 5,
+  "stability_requires_prior_observation": true,
+
+  "max_attempts": 3,
+  "lock_stale_hours": 24,
+  "ffmpeg": "ffmpeg",
+  "ffprobe": "ffprobe",
+
+  "sync": {
+    "sample_rate": 8000,
+    "max_lag_seconds": 120,
+    "window_seconds": 60,
+    "coarse_windows": 7,
+    "fine_windows": 5,
+    "min_ncc": 0.05,
+    "min_peak_ratio": 1.5,
+    "min_agreeing_windows": 3,
+    "min_agree_fraction": 0.6
+  },
+  "encode": {
+    "preset": "fast",
+    "crf": 20,
+    "audio_bitrate": "192k",
+    "copy_untrimmed_when_possible": true
+  }
+}
