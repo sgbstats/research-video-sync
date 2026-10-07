@@ -6,9 +6,9 @@ Design rules
   promoted, files in RAW are only ever opened for reading (ffprobe/ffmpeg -i).
 * State and logs live in 99_LOGS_QC (state/<ID>.json + pipeline_status.csv).
 * One broken participant never stops the batch: every participant runs inside try/except.
-* Idempotent: a SUCCESS participant with intact outputs is skipped (cheap size checks only,
-  RAW is never re-hashed); interrupted participants resume from recorded state.
-* Outputs are written as *.partial and renamed atomically after ffmpeg + ffprobe succeed.
+* Idempotent: a SUCCESS participant with intact outputs is skipped (output hashes checked when
+  recorded, unchanged RAW never re-hashed); interrupted participants resume from recorded state.
+* Outputs are written as *.partial and published without replacement after ffmpeg + ffprobe succeed.
 * --dry-run performs read-only decisions and mutates nothing (no moves, no state, no video).
 """
 from __future__ import annotations
@@ -16,14 +16,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from . import media, syncest
+from . import checkpoints, media, syncest
 from .config import Config
 from .discovery import (Discovery, discover_jobs, find_sources, is_ignored_dir, is_junk_file, is_transit_file,
                         valid_participant_id)
@@ -49,6 +49,14 @@ class Outcome:
     message: str = ""
     kind: str = ""            # "new" | "skipped" | "" | "dry"
     plan: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PreparedPair:
+    pid: str
+    state: dict
+    sources: dict
+    output_dir: Path
 
 
 @dataclass
@@ -126,6 +134,8 @@ class Pipeline:
         self.sleep = sleep_fn
         self.store = StateStore(cfg)
         self._integrity: dict[str, str | None] = {}   # per-run cache of RAW integrity results
+        self._preparing = False
+        self._readiness: dict[tuple[str, Path, bool], tuple[str, str] | None] = {}
 
     # ------------------------------------------------------------------ helpers
     def _iso(self) -> str:
@@ -195,6 +205,49 @@ class Pipeline:
         return sorted(ids), bad
 
     def run(self) -> Summary:
+        if self.dry:
+            return self._run_batch()
+        with media.process_scope() as processes:
+            try:
+                return self._run_batch()
+            except BaseException:
+                processes.cancel()
+                raise
+
+    def _isolated(self, pid: str, action: Callable[[], Outcome | PreparedPair]) -> Outcome | PreparedPair:
+        try:
+            return action()
+        except Exception as exc:
+            log.exception("unexpected error for %s", pid)
+            out = Outcome(pid, S.INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
+            if not self.dry:
+                try:
+                    st = self.store.load(pid, self._iso())
+                    self._set(st, S.INTERNAL_ERROR, out.message)
+                    self.store.save(st)
+                except Exception:
+                    log.exception("could not record state for %s", pid)
+            return out
+
+    def _observe_inbox(self, ids: list[str]) -> None:
+        """Observe all shared folders before any promotion changes their contents."""
+        self._readiness.clear()
+        jobs = discover_jobs(self.cfg, self.cfg.inbox_dir)
+        for pid in ids:
+            job = jobs.get(pid)
+            if not job or job.problem:
+                continue
+            st = self._load(pid)
+            if st.get("stage") == "PROMOTING":
+                continue
+            folder = job.mom[0].parent
+            try:
+                wait = self._check_ready(st, folder, self._files_under(folder))
+            except OSError as exc:
+                wait = (S.WAITING_FOR_STABILITY, f"could not observe source files: {exc}")
+            self._readiness[(pid, folder, True)] = wait
+
+    def _run_batch(self) -> Summary:
         summary = Summary(dry_run=self.dry)
         cfg = self.cfg
         if self.dry and cfg.stability_requires_prior_observation and cfg.stability_minutes > 0:
@@ -206,26 +259,43 @@ class Pipeline:
             log.warning("%s -> INVALID_ID: %s", o.pid, o.message)
             summary.outcomes.append(o)
         log.info("%d participant folder(s) to consider%s", len(ids), " [DRY RUN]" if self.dry else "")
-        for pid in ids:
+        if not self.dry:
+            self._observe_inbox(ids)
+        self._preparing = not self.dry
+        prepared = []
+        try:
+            for pid in ids:
+                prepared.append(self._isolated(pid, lambda pid=pid: self.process(pid)))
+        finally:
+            self._preparing = False
+            self._readiness.clear()
+        jobs = [job for job in prepared if isinstance(job, PreparedPair)]
+        results: dict[str, Outcome] = {}
+        if jobs:
+            log.info("Processing %d pair(s), maximum parallel pairs: %d", len(jobs), cfg.max_parallel_pairs)
+            executor = ThreadPoolExecutor(max_workers=cfg.max_parallel_pairs, thread_name_prefix="rg2019-pair")
+            futures = {}
             try:
-                out = self.process(pid)
-            except Exception as exc:              # participant-level isolation: never abort the batch
-                log.exception("unexpected error for %s", pid)
-                out = Outcome(pid, S.INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
-                if not self.dry:
-                    try:
-                        st = self.store.load(pid, self._iso())
-                        self._set(st, S.INTERNAL_ERROR, out.message)
-                        self.store.save(st)
-                    except Exception:             # pragma: no cover - last-resort logging only
-                        log.exception("could not record state for %s", pid)
-            summary.outcomes.append(out)
+                for job in jobs:
+                    futures[job.pid] = executor.submit(
+                        self._isolated, job.pid, lambda job=job: self._finish_raw(job))
+                for pid, future in futures.items():
+                    results[pid] = future.result()
+            except BaseException:
+                media.cancel_processes()
+                for future in futures.values():
+                    future.cancel()
+                raise
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
+        summary.outcomes.extend(results[item.pid] if isinstance(item, PreparedPair) else item
+                                for item in prepared)
         if not self.dry:
             self.store.rewrite_csv()
         return summary
 
     # ------------------------------------------------------------------ per participant
-    def process(self, pid: str) -> Outcome:
+    def process(self, pid: str) -> Outcome | PreparedPair:
         cfg = self.cfg
         discovered = {root: discover_jobs(cfg, root) for root in (cfg.inbox_dir, cfg.raw_dir)}
         legacy = any((root / pid).is_dir() for root in discovered)
@@ -246,7 +316,7 @@ class Pipeline:
         in_inbox, in_raw = bool(payload), raw.is_dir()
         resuming = st.get("stage") == "PROMOTING"
 
-        if pid in self.reprocess:
+        if pid in self.reprocess or st.get("reprocess_pending"):
             if self.dry:
                 log.info("[DRY-RUN] %s: would archive existing outputs to _superseded_<timestamp> and re-sync from RAW", pid)
                 return Outcome(pid, WOULD_PROCESS, "", "dry",
@@ -267,7 +337,7 @@ class Pipeline:
         return self._fail(st, S.RAW_CONFLICT,
                           f"state says {st.get('status')} but neither 00_INBOX/{pid} nor 01_RAW/{pid} exists")
 
-    def _process_discovered(self, pid: str) -> Outcome:
+    def _process_discovered(self, pid: str) -> Outcome | PreparedPair:
         """Process a pair in an arbitrary directory, preserving its relative path."""
         cfg = self.cfg
         st = self._load(pid)
@@ -297,7 +367,7 @@ class Pipeline:
             return self._fail(st, S.RAW_CONFLICT, "source folder changed after validation")
         st["source_folder"] = relative_dir.as_posix()
         out = cfg.synced_dir / relative_dir
-        if pid in self.reprocess:
+        if pid in self.reprocess or st.get("reprocess_pending"):
             if self.dry:
                 return Outcome(pid, WOULD_PROCESS, "", "dry", ["archive existing outputs and re-sync from RAW"])
             self._prepare_reprocess(st, out)
@@ -384,6 +454,9 @@ class Pipeline:
           3. ALWAYS ON while stability_recheck_seconds > 0 (even if stability_minutes == 0): re-stat
              every file after a short pause to catch a file that is still growing.
         stability_minutes = 0 therefore disables only layer 2."""
+        key = (st["participant_id"], folder, marker)
+        if key in self._readiness:
+            return self._readiness[key]
         cfg = self.cfg
         if marker and cfg.require_ready_marker and not (folder / cfg.ready_marker_name).is_file():
             return S.WAITING_FOR_READY, f"{cfg.ready_marker_name} not present yet"
@@ -450,7 +523,7 @@ class Pipeline:
         return None, {r: (paths[r], infos[r]) for r in ROLES}
 
     # ------------------------------------------------------------------ INBOX branch
-    def _from_inbox(self, pid, st, inbox, raw, out, resuming) -> Outcome:
+    def _from_inbox(self, pid, st, inbox, raw, out, resuming) -> Outcome | PreparedPair:
         cfg = self.cfg
         if resuming:
             log.info("%s: resuming interrupted promotion", pid)
@@ -494,6 +567,7 @@ class Pipeline:
                                       f"01_RAW/{pid}/{item.name} already exists; refusing to overwrite")
                 os.rename(item, dst)          # same volume => atomic; never overwrites on Windows
                 moved.append(item.name)
+                self._save(st)
             self._save(st)
         except FileExistsError:
             return self._fail(st, S.RAW_CONFLICT, f"01_RAW/{pid} appeared while promoting; nothing overwritten")
@@ -577,11 +651,11 @@ class Pipeline:
             f = out / rec["name"] if rec else None
             suffix = "side_by_side" if key == "side_by_side" else f"{key}_synced"
             if (not rec or rec["name"] != self._output_name(st["participant_id"], suffix)
-                    or not f.is_file() or f.stat().st_size != rec["size"]):
+                    or not checkpoints.matches_output(f, rec)):
                 return False
         return True
 
-    def _from_raw(self, pid, st, raw, out, promoted_now: bool = False) -> Outcome:
+    def _from_raw(self, pid, st, raw, out, promoted_now: bool = False) -> Outcome | PreparedPair:
         cfg = self.cfg
         # 1. tear down completed work quickly
         if st.get("sync_completed_at") and st.get("sources") and st.get("stage") != "PROMOTING":
@@ -590,6 +664,8 @@ class Pipeline:
                 if st.get("status") != S.SUCCESS:
                     self._set(st, S.SUCCESS, "")
                 self._save(st)
+                if not self.dry:
+                    checkpoints.cleanup(cfg, pid)
                 log.info("%s: already complete - skipped", pid)
                 return Outcome(pid, S.SUCCESS, "", "skipped")
         st["stage"] = "RAW" if st.get("stage") in (None, "NEW", "PROMOTING") else st["stage"]
@@ -630,21 +706,34 @@ class Pipeline:
             if st.get("stage") == "PROMOTING":
                 st["stage"], st["raw_promoted_at"] = "RAW", st.get("raw_promoted_at") or self._iso()
                 self._set(st, S.RAW_PROMOTED, "promotion completed")
+        for key, rec in st.get("outputs", {}).get("files", {}).items():
+            if key not in ROLES and not (key == "side_by_side" and cfg.create_side_by_side):
+                continue
+            existing = out / rec["name"]
+            if existing.exists() and not checkpoints.matches_output(existing, rec):
+                return self._fail(st, S.OUTPUT_CONFLICT,
+                                  f"{existing.name} differs from its recorded size or SHA-256; not overwriting.")
         src = {r: (raw / st["sources"][r]["name"], MediaInfo(**st["sources"][r]["media"])) for r in ROLES}
+        job = PreparedPair(pid, st, src, out)
+        return job if self._preparing else self._finish_raw(job)
 
+    def _finish_raw(self, job: PreparedPair) -> Outcome:
+        pid, st, src, out = job.pid, job.state, job.sources, job.output_dir
+        cfg = self.cfg
         # 3. offset
         offset = st.get("sync", {}).get("offset_seconds")
         if self.manual_offset is not None and self.only and len(self.only) == 1:
             offset = float(self.manual_offset)
             st["sync"] = {"offset_seconds": offset, "confidence": None, "offset_source": "manual",
                           "estimated_at": self._iso(), "reason": "offset supplied manually after review"}
+            self._save(st)
         if offset is None:
             if self.dry:
                 plan = ["extract mono audio from both RAW videos, estimate offset (windowed two-stage NCC)",
                         f"encode {pid}_mom_synced.mp4 / {pid}_child_synced.mp4 into 02_SYNCED/{pid}"]
                 return Outcome(pid, WOULD_PROCESS, "", "dry", plan)
             try:
-                est = self._estimate(pid, src)
+                est = self._estimate(pid, src, st)
             except (MediaError, OSError, ValueError) as exc:
                 st["attempts"] = st.get("attempts", 0) + 1
                 return self._fail(st, S.SYNC_FAILED, str(exc))
@@ -669,18 +758,19 @@ class Pipeline:
                            [f"encode with offset {offset:+.4f}s (trim mom {mt:.3f}s, child {ct:.3f}s)"])
         return self._encode_all(pid, st, src, out, offset)
 
-    def _estimate(self, pid: str, src: dict) -> syncest.SyncEstimate:
-        cfg, prm = self.cfg, self.cfg.sync
-        with tempfile.TemporaryDirectory(prefix=f"rg2019_{pid}_", ignore_cleanup_errors=True) as tmp:
-            arrays = {}
+    def _estimate(self, pid: str, src: dict, st: dict) -> syncest.SyncEstimate:
+        cfg = self.cfg
+        prm = cfg.sync
+        arrays = {}
+        try:
             for role in ROLES:
                 path, _ = src[role]
-                log.info("%s: extracting %d Hz mono audio from %s", pid, prm.sample_rate, path.name)
-                arrays[role] = media.extract_audio(cfg, path, Path(tmp) / f"{role}.pcm", prm.sample_rate)
-            est = syncest.estimate_offset(arrays["mom"], arrays["child"], prm,
-                                          src["mom"][1].audio_start, src["child"][1].audio_start)
-            del arrays          # release the memory maps before the temp dir is removed (Windows)
-            return est
+                arrays[role] = checkpoints.audio(cfg, st, role, path, self._save)
+            return syncest.estimate_offset(arrays["mom"], arrays["child"], prm,
+                                           src["mom"][1].audio_start, src["child"][1].audio_start)
+        finally:
+            for array in arrays.values():
+                array._mmap.close()
 
     # ------------------------------------------------------------------ encoding
     def _output_name(self, pid: str, suffix: str) -> str:
@@ -692,6 +782,9 @@ class Pipeline:
         mt, ct = syncest.trim_plan(offset, cfg.encode.min_trim_seconds)
         trims = {"mom": mt, "child": ct}
         out.mkdir(parents=True, exist_ok=True)
+        conflict = checkpoints.recover_outputs(st, out, self._save)
+        if conflict:
+            return self._fail(st, S.OUTPUT_CONFLICT, conflict)
         for stale in out.glob(f"{pid}_*.mp4.partial"):
             log.info("%s: removing stale %s", pid, stale.name)
             stale.unlink(missing_ok=True)
@@ -707,15 +800,17 @@ class Pipeline:
                     return self._fail(st, S.OUTPUT_CONFLICT,
                                       "Configured video_description differs from recorded outputs; "
                                       "use --reprocess to change output names.")
-                if not (rec and final.is_file() and final.stat().st_size == rec["size"]):
+                if not (rec and checkpoints.matches_output(final, rec)):
                     if final.exists():       # unrecorded or truncated/modified: never overwrite
                         return self._fail(st, S.OUTPUT_CONFLICT,
                                           f"{final.name} exists in 02_SYNCED but does not match the recorded "
                                           f"state; not overwriting. Move/rename it and re-run.")
                     part = final.with_name(final.name + ".partial")   # missing (or never made): (re)create
                     media.side_by_side(cfg, out / files["mom"]["name"], out / files["child"]["name"], part)
-                    self._commit(cfg, part, final, files, "side_by_side", None, "reencode")
+                    self._commit(st, part, final, "side_by_side", None, "reencode")
                     self._save(st)
+        except checkpoints.OutputConflict as exc:
+            return self._fail(st, S.OUTPUT_CONFLICT, str(exc))
         except MediaError as exc:
             st["attempts"] = st.get("attempts", 0) + 1
             return self._fail(st, S.ENCODE_FAILED, str(exc))
@@ -726,6 +821,7 @@ class Pipeline:
         st["stage"], st["attempts"] = "SYNCED", 0
         self._set(st, S.SUCCESS, "")
         self._save(st)
+        checkpoints.cleanup(cfg, pid)
         log.info("%s: SUCCESS (offset %+.4f s)", pid, offset)
         return Outcome(pid, S.SUCCESS, "", "new")
 
@@ -738,7 +834,7 @@ class Pipeline:
                        "Configured video_description differs from recorded outputs; "
                        "use --reprocess to change output names.")
             return False
-        if rec and final.is_file() and final.stat().st_size == rec["size"]:
+        if rec and checkpoints.matches_output(final, rec):
             return True                                   # already produced by an earlier (interrupted) run
         if final.exists():
             self._fail(st, S.OUTPUT_CONFLICT, f"{final.name} exists in 02_SYNCED but does not match the "
@@ -748,12 +844,14 @@ class Pipeline:
         log.info("%s: writing %s (trim %.3f s)", pid, final.name, trim)
         method = media.encode(cfg, src_path, part, trim, info)
         expected = (info.duration or 0) - trim
-        self._commit(cfg, part, final, files, role, expected, method)
+        self._commit(st, part, final, role, expected, method)
         self._save(st)
         return True
 
-    def _commit(self, cfg, part: Path, final: Path, files: dict, key: str, expected: float | None, method: str):
-        """Validate the .partial with ffprobe, then rename atomically."""
+    def _commit(self, st: dict, part: Path, final: Path, key: str,
+                expected: float | None, method: str):
+        """Validate the .partial with ffprobe, then publish without replacing another file."""
+        cfg = self.cfg
         pi = media.probe(cfg, part)
         if not (pi.has_video and pi.has_audio and pi.duration and pi.duration > 0):
             part.unlink(missing_ok=True)
@@ -762,8 +860,7 @@ class Pipeline:
         if expected is not None and abs(pi.duration - expected) > cfg.encode.duration_tolerance_seconds:
             part.unlink(missing_ok=True)
             raise MediaError(f"{final.name}: duration {pi.duration:.2f}s differs from expected {expected:.2f}s")
-        os.replace(part, final)
-        files[key] = {"name": final.name, "size": final.stat().st_size, "duration": pi.duration, "method": method}
+        checkpoints.publish_output(st, part, final, key, pi, method, self._save)
 
     # ------------------------------------------------------------------ reprocess
     def _prepare_reprocess(self, st: dict, out: Path) -> None:
@@ -771,12 +868,25 @@ class Pipeline:
         recomputed from RAW.  Recorded source hashes are kept."""
         pid = st["participant_id"]
         log.info("%s: --reprocess requested", pid)
-        if out.is_dir():
-            stamp = self.now().strftime("%Y%m%d_%H%M%S")
-            arch = out / f"_superseded_{stamp}"
-            for f in out.iterdir():
-                if f.is_file() and f.name.startswith(f"{pid}_"):
-                    arch.mkdir(exist_ok=True)
-                    os.rename(f, arch / f.name)
+        if not st.get("reprocess_pending"):
+            st["reprocess_pending"] = {
+                "archive": f"_superseded_{self.now().strftime('%Y%m%d_%H%M%S')}_{time.time_ns()}",
+                "files": [f.name for f in sorted(out.iterdir())
+                          if f.is_file() and f.name.startswith(f"{pid}_")] if out.is_dir() else []}
+            self._save(st)
+        pending = st["reprocess_pending"]
+        arch = out / pending["archive"]
+        for name in pending["files"]:
+            source, dest = out / name, arch / name
+            if dest.exists():
+                if source.exists():
+                    raise OSError(f"reprocess archive conflict: {dest}")
+                continue
+            arch.mkdir(parents=True, exist_ok=True)
+            os.rename(source, dest)
         st.update({"sync": {}, "outputs": {"files": {}}, "sync_completed_at": None, "attempts": 0})
+        st.pop("audio_checkpoints", None)
+        st.pop("reprocess_pending", None)
         self._set(st, S.RAW_PROMOTED, "reprocess requested")
+        self._save(st)
+        checkpoints.cleanup(self.cfg, pid)

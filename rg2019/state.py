@@ -6,17 +6,24 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
+import socket
 import threading
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .config import Config
 from .discovery import valid_participant_id
+from .processes import process_identity
 
 SCHEMA = 1
 HISTORY_LIMIT = 30
+_log = logging.getLogger(__name__)
 
 CSV_COLUMNS = ["participant_id", "status", "mom_source", "child_source", "mom_sha256", "child_sha256",
                "mom_duration", "child_duration", "offset_seconds", "sync_confidence",
@@ -24,13 +31,26 @@ CSV_COLUMNS = ["participant_id", "status", "mom_source", "child_source", "mom_sh
 
 
 def atomic_write_text(path: Path, text: str) -> None:
+    """Publish fsynced text atomically, briefly retrying Windows sharing/access violations."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     with open(tmp, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
-    os.replace(tmp, path)
+    retry_delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            if (os.name != "nt" or getattr(exc, "winerror", None) not in (5, 32, 33)
+                    or attempt == len(retry_delays)):
+                raise
+            delay = retry_delays[attempt]
+            _log.warning("Atomic publication of %s blocked; retry %d/%d in %.2fs: %s",
+                         path, attempt + 1, len(retry_delays), delay, exc)
+            time.sleep(delay)
 
 
 def new_state(pid: str, now: str) -> dict[str, Any]:
@@ -123,11 +143,10 @@ def _fmt(v, nd=2):
 class RunLock:
     """Prevents two daily runs from overlapping (e.g. a long run + the next scheduled trigger).
 
-    A live run keeps the lock "fresh" with a heartbeat: a daemon thread touches the lock file's
-    modified time every min(60 s, lock_stale_hours/4).  A lock is only considered abandoned when its
-    mtime has NOT been refreshed for `stale_hours`, i.e. the owning process died (a dead process
-    cannot heartbeat; the daemon thread dies with it).  A legitimate run of any length is therefore
-    never taken over, and a crashed run is still recovered automatically."""
+    Structured local owners are recovered immediately only after verifying death or PID reuse.
+    Live, foreign-host and unverifiable structured owners are never stolen. Legacy records retain
+    the age-based recovery policy. A persistent OS-locked guard serializes reclaim, heartbeat and
+    release; its existence does not indicate an active run and it must not be removed."""
 
     def __init__(self, path: Path, stale_hours: float):
         self.path, self.stale = path, timedelta(hours=stale_hours)
@@ -135,37 +154,115 @@ class RunLock:
         self.held = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._token = uuid.uuid4().hex
+        self._host = socket.gethostname().casefold()
+
+    @contextmanager
+    def _guard(self):
+        # Lock a separate, stable inode: locking the replaceable run lock itself would let a
+        # contender lock an old inode and delete a new owner's record during reclaim.
+        guard = self.path.with_name(self.path.name + ".guard")
+        with open(guard, "a+b", buffering=0) as fh:
+            fh.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                # Windows can lock beyond EOF. Initialize only after locking so another
+                # contender cannot flush byte zero while it is locked by this owner.
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
+                yield
+            finally:
+                fh.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    def _record(self) -> dict | None:
+        try:
+            record = json.loads(self.path.read_text(encoding="utf-8"))
+            if (isinstance(record, dict) and record.get("schema") == "rg2019-run-lock-1"
+                    and isinstance(record.get("pid"), int) and not isinstance(record["pid"], bool)
+                    and record["pid"] > 0 and isinstance(record.get("host"), str)
+                    and isinstance(record.get("token"), str) and len(record["token"]) == 32
+                    and (record.get("identity") is None or isinstance(record["identity"], str))):
+                return record
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _owns_record(self) -> bool:
+        record = self._record()
+        return record is not None and record["token"] == self._token
+
+    def _reclaimable(self, age: timedelta) -> bool:
+        record = self._record()
+        if record is None:
+            return age >= self.stale
+        if record["host"].casefold() != self._host:
+            return False
+        status, identity = process_identity(record["pid"])
+        return status == "dead" or (status == "alive" and identity is not None
+                                    and record["identity"] is not None
+                                    and identity != record["identity"])
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(self.interval):
             try:
-                os.utime(self.path)
+                with self._guard():
+                    if self._owns_record():
+                        os.utime(self.path)
+                    else:
+                        return
             except OSError:
                 pass
 
     def acquire(self) -> None:
+        if self.held:
+            raise RuntimeError(f"lock is already held: {self.path}")
+        self._token = uuid.uuid4().hex
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
+        with self._guard():
+            for _ in range(2):
                 try:
-                    age = datetime.now() - datetime.fromtimestamp(self.path.stat().st_mtime)
-                except FileNotFoundError:          # released between our two calls: just retry
+                    fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    try:
+                        age = datetime.now() - datetime.fromtimestamp(self.path.stat().st_mtime)
+                    except FileNotFoundError:
+                        continue
+                    if not self._reclaimable(age):
+                        raise RuntimeError(f"another pipeline run appears to be active (lock {self.path}, "
+                                           f"last heartbeat {age} ago); owner is not verified abandoned")
+                    self.path.unlink()
                     continue
-                if age < self.stale:
-                    raise RuntimeError(f"another pipeline run appears to be active (lock {self.path}, last "
-                                       f"heartbeat {age} ago); if it crashed, delete the lock file")
-                self.path.unlink(missing_ok=True)   # no heartbeat for stale_hours: owner is dead
-                continue
-            with os.fdopen(fd, "w") as fh:
-                fh.write(f"pid={os.getpid()} started={datetime.now().isoformat(timespec='seconds')}\n")
-            self.held = True
-            self._stop.clear()
-            self._thread = threading.Thread(target=self._heartbeat, name="rg2019-lock-heartbeat", daemon=True)
-            self._thread.start()
-            return
-        raise RuntimeError(f"could not acquire lock {self.path}")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        record = {"schema": "rg2019-run-lock-1", "host": self._host,
+                                  "pid": os.getpid(), "owner": f"pid={os.getpid()}",
+                                  "identity": process_identity(os.getpid())[1], "token": self._token,
+                                  "started": datetime.now().isoformat(timespec="seconds")}
+                        fh.write(json.dumps(record) + "\n")
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                except BaseException:
+                    self.path.unlink(missing_ok=True)
+                    raise
+                self.held = True
+                break
+            else:
+                raise RuntimeError(f"could not acquire lock {self.path}")
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._heartbeat, name="rg2019-lock-heartbeat", daemon=True)
+        self._thread.start()
 
     def release(self) -> None:
         if self.held:
@@ -173,7 +270,9 @@ class RunLock:
             if self._thread is not None:
                 self._thread.join(timeout=5)
                 self._thread = None
-            self.path.unlink(missing_ok=True)
+            with self._guard():
+                if self._owns_record():
+                    self.path.unlink(missing_ok=True)
             self.held = False
 
     def __enter__(self):

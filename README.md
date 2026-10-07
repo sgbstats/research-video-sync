@@ -85,6 +85,9 @@ extra encode and requires additional processing time and disk space. To preserve
 behavior, explicitly set `"stability_minutes": 120` and `"create_side_by_side": false` before
 upgrading.
 
+Pair processing now defaults to **two concurrent pairs**, including existing configs that omit
+`max_parallel_pairs`. Set `"max_parallel_pairs": 1` to retain sequential processing.
+
 ## 2. Architecture
 
 ```
@@ -143,6 +146,7 @@ Daily flow per participant:
 | `video_description` | `null` | optional filename-safe label; `"pilot visit"` produces `IDxxxx_pilot_visit_mom_synced.mp4` (and labels child and side-by-side outputs) |
 | `require_approval` | `true` | require typing `yes` after the pre-run report on real runs |
 | `max_attempts` | `3` | automatic retries for `SYNC_FAILED`/`ENCODE_FAILED` |
+| `max_parallel_pairs` | `2` | maximum simultaneous participant pairs; positive integer; `1` runs sequentially |
 | `sync.*` | see file | sample rate (8000 Hz), `max_lag_seconds` (120), window length (60 s), thresholds; `min_agreeing_windows` must not exceed `fine_windows` |
 | `encode.*` | `fast`, CRF 20, 192k | x264 preset/CRF, AAC bitrate, `copy_untrimmed_when_possible` |
 | `ffmpeg`, `ffprobe` | `ffmpeg`, `ffprobe` | names on `PATH`, managed fallback, or absolute paths |
@@ -160,11 +164,55 @@ research-video-sync --config config.json
 ```
 
 Other options: `--setup FOLLOWUP_ROOT` (create config and folder structure), `--participant IDxxxx` (repeatable; restrict to those IDs), `--reprocess IDxxxx`, `--manual-offset SECONDS`, `--yolo` (skip approval and set stability minutes to zero for this invocation),
-`--log-level DEBUG`. Exit code `0` = fine, `1` = real run cancelled at approval, `2` = something needs manual review/failed, `3` = config/tool/lock problem.
+`--workers N` (override the pair limit without editing config), `--log-level DEBUG`. Exit code `0` = fine, `1` = real run cancelled at approval, `2` = something needs manual review/failed, `3` = config/tool/lock problem, `130` = interrupted.
 The run ends with a summary (Newly completed / Skipped completed / Waiting / Manual review / Failed, with IDs).
 `--yolo` still prints the pre-run report and retains transfer-file detection, the configured growth re-check, and the run lock. Changing `video_description` for existing outputs requires `--reprocess`; prior files are archived.
 If the pre-run report finds no videos eligible to sync (including when all are already synced or waiting), the command prints the report and exits without asking for approval or starting a full run. It records any first stability observations so a later run can proceed. Review problems still return exit code `2`.
 Daily scheduling: [docs/WINDOWS_TASK_SCHEDULER.md](docs/WINDOWS_TASK_SCHEDULER.md).
+
+### Parallel pairs and restarting interrupted work
+
+Readiness checks and INBOX promotion are coordinated before independent RAW-to-SYNCED jobs
+run in a bounded worker pool. Two different participant pairs can synchronize/encode at once;
+the camera outputs within each pair remain sequential. Shared inbox folders and READY markers
+remain supported. The pre-run report shows the worker limit. Dry runs remain sequential and read-only.
+
+```powershell
+research-video-sync --config config.json --workers 2
+# Use one pair at a time on a resource-constrained workstation:
+research-video-sync --config config.json --workers 1
+# After interruption, rerun the normal command:
+research-video-sync --config config.json
+```
+
+Completed audio extractions are checkpointed in `99_LOGS_QC\work\<ID>`; offsets and output
+publication records are saved atomically in the participant's state file. A restart reuses valid
+completed audio, saved offsets, and committed videos, including a video published just before
+the process was killed. An unfinished individual encode restarts from its beginning, not from
+the last frame. An interrupted correlation calculation is recalculated unless its offset was saved.
+Committed outputs retain their SHA-256 and are checked whenever reused, including same-size edits.
+Unrelated or altered final outputs are conflicts and are never silently adopted or overwritten.
+Legacy output records without a checksum retain size-only validation; deliberate reprocessing
+creates checksum-protected outputs. Full output checks add disk reads on subsequent runs.
+Publication never replaces an existing filename: Windows uses a no-replace rename, and POSIX
+uses an atomic hard link followed by removal of the partial name. POSIX output storage must
+support hard links; an unsupported filesystem produces an explicit failure, not an unsafe fallback.
+Do **not** use `--reprocess` to resume: that deliberately archives outputs and discards prior sync work.
+
+Allow scratch space for mono PCM: at 8000 Hz, 16-bit, each camera uses approximately 58 MB per
+hour. Checkpoints for unfinished pairs remain until successful completion or deliberate reprocessing.
+Keep state and work files private: the PCM files contain study audio. Consider excluding
+`99_LOGS_QC\work` from Synology Drive synchronization, and do not edit/delete checkpoints during a run.
+The CSV is a regenerated report, not the resume source of truth; after a hard kill it may lag the JSON state.
+
+Owned FFmpeg processes are stopped on cancellation or pipeline termination. A verified dead
+local lock owner can be recovered immediately; live or unverifiable owners remain protected.
+Existing retry limits and manual-review rules still apply. Checkpoints protect process-interruption
+boundaries, not arbitrary disk corruption or power-loss durability.
+
+FFmpeg already uses multiple CPU threads, so more workers do not guarantee higher throughput.
+Start with two, reduce to one if CPU, memory, or storage contention is excessive, and increase only
+after measuring representative recordings. Encoding remains CPU-based; GPU support is not added here.
 
 **Dry run** does read-only work only: it applies the readiness/stability rules, discovers and `ffprobe`s the videos and
 prints the exact steps that *would* happen. It does not hash, move, extract audio, encode, or write state/CSV/log files.
@@ -270,7 +318,7 @@ Never edit `01_RAW`. Do not delete state files casually: without state a finishe
 and becomes `OUTPUT_CONFLICT` (safe, but needs a manual step). Turning `create_side_by_side` on later does **not**
 retro-generate files for completed participants; use `--reprocess` for those you want. Once a side-by-side file has been
 created and `create_side_by_side` is on, it is part of the completion check: if it is later deleted it is regenerated from the
-synced videos on the next run; if it exists but differs from the recorded size it is flagged `OUTPUT_CONFLICT` and never overwritten.
+synced videos on the next run; if it exists but differs from the recorded size or SHA-256 it is flagged `OUTPUT_CONFLICT` and never overwritten.
 
 ## 7. Troubleshooting
 
@@ -278,10 +326,14 @@ synced videos on the next run; if it exists but differs from the recorded size i
   for the first managed-binary download (scheduled tasks often have a limited `PATH`).
 * *Participant stays in WAITING in every dry-run* - if `stability_minutes>0` and prior observation is required, dry-runs cannot record the observation; see the dry-run note above.
 * *Participant stays in WAITING* - read the message in `pipeline_status.csv` (`error_message`) or the log; check for transfer-in-progress files and the growth re-check, which remain active when `stability_minutes=0`. If age/prior-observation checks are enabled, adjust `stability_minutes` or set `stability_requires_prior_observation=false`.
-* *`another pipeline run appears to be active`* - a run is in progress or crashed. A live run refreshes the lock's modified time
-  every minute (heartbeat), so a long batch is never taken over, however long it runs. A lock whose heartbeat stopped
-  (crashed run) is replaced automatically after `lock_stale_hours`; otherwise delete `99_LOGS_QC\pipeline.lock` once you are sure
-  nothing is running.
+* *`another pipeline run appears to be active`* - a run is active or its owner cannot be verified.
+  Verified dead local owners are recovered immediately; live local owners are never taken over just
+  because their heartbeat is old. Structured foreign/unverifiable owners remain protected;
+  legacy or malformed locks retain age-based stale recovery.
+  Do not delete a lock until you have confirmed no pipeline or its encoders are still running.
+  The persistent `pipeline.lock.guard` file is an OS-locking aid, not evidence of an active run;
+  its initialization is serialized under the OS lock, including on Windows. Do not delete it
+  while processes could be using it.
 * *`PROMOTE_FAILED`* - a file was open/locked (Synology Drive, antivirus); just re-run. INBOX and RAW must be on one volume.
 * *`LOW_CONFIDENCE`* - inspect `99_LOGS_QC\state\IDxxxx.json` (`sync.details`): quiet recordings, camera mics far apart,
   an offset larger than `max_lag_seconds`. Play both videos, decide, use `--manual-offset`.
@@ -297,7 +349,7 @@ python -m build             # build source and wheel distributions
 The test extra includes the build backend requirements (`setuptools>=68` and `wheel`)
 because the wheel compatibility test builds without an isolated environment.
 
-GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10 and 3.13 on
+GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10, 3.12 and 3.13 on
 Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
 trusted publisher on PyPI for the repository and `pypi` environment before publishing.
 

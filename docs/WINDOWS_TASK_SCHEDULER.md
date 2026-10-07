@@ -2,6 +2,8 @@
 
 The pipeline is a normal command-line program; Task Scheduler only needs to start it once a day.
 Everything it writes (state, CSV, log) goes to `99_LOGS_QC`, so it works with no one logged in.
+The default is two concurrently processed pairs. Set `"max_parallel_pairs": 1` in the config
+or add `--workers 1` to the task arguments to retain sequential processing.
 
 > **Note:** these commands were written and reviewed on a Linux development machine and could not be
 > executed on Windows there. Step 5 (run it once by hand and read the log) is how you verify them on your PC.
@@ -113,6 +115,7 @@ schtasks /Create /TN "RG2019 daily video sync" /SC DAILY /ST 02:00 /F ^
 | `0x1` | A real run with eligible videos was cancelled at the approval prompt (set `require_approval` to `false` for unattended tasks). |
 | `0x2` | Finished, but at least one participant needs **manual review** or **failed** - read the log. |
 | `0x3` | Nothing was processed: config error, `ffmpeg`/`ffprobe` missing, project drive not available, or another run holds the lock. |
+| `0x82` | Interrupted (`130`); completed checkpoints are retained for the next run. |
 
 ## 5. Test it
 
@@ -127,7 +130,13 @@ then open today's file in `99_LOGS_QC\logs`. To switch it off: `schtasks /Change
 
 * Start with a **dry-run task** (add `--dry-run` to the arguments) for a few days and read what it *would* do.
 * If a run crashes or the PC loses power, just let the next run happen: interrupted work resumes.
-  A run keeps `99_LOGS_QC\pipeline.lock` fresh with a heartbeat, so a long backlog is never taken over by the next scheduled start; a lock that has not been refreshed for `lock_stale_hours` (default 24 h, i.e. the run crashed) is replaced automatically;
-  if you are sure nothing is running and want to run sooner, delete that one file.
+  Completed audio, offsets and videos are reused; an unfinished individual encode restarts from its beginning.
+  Do not add `--reprocess` to the scheduled command to resume.
+  Verified dead local lock owners are recovered immediately. Live local owners remain protected even
+  if their heartbeat is old; structured foreign/unverifiable owners remain protected and legacy/malformed
+  records retain age-based recovery.
+  Do not delete a lock until you have confirmed no pipeline or its encoders remain active.
+* Allow space for checkpoints in `99_LOGS_QC\work\<ID>` (about 58 MB per camera-hour at the
+  default sample rate). They contain study audio; consider excluding this work folder from Synology sync.
 * In Synology Drive Client you may exclude `*.partial` and `*.tmp` from syncing so half-written videos are not uploaded.
 * Windows Update reboots and sleep can interrupt a run; that is safe, but choose a time outside your update window.

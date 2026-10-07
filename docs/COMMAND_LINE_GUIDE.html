@@ -488,9 +488,16 @@ observations.</td>
 reprocessing.</td>
 </tr>
 <tr>
+<td><code>max_parallel_pairs</code></td>
+<td><code>2</code></td>
+<td>Maximum concurrent participant pairs; a positive integer.
+Use <code>1</code> for sequential processing.</td>
+</tr>
+<tr>
 <td><code>lock_stale_hours</code></td>
 <td><code>24</code></td>
-<td>A run lock with no heartbeat for this long can be replaced.</td>
+<td>Age-based recovery for legacy/malformed locks. Structured dead local
+owners recover immediately; live, foreign or unverifiable owners stay protected.</td>
 </tr>
 <tr>
 <td><code>ffmpeg</code></td>
@@ -783,6 +790,12 @@ for several IDs.</td>
 <td>Set logging detail.</td>
 </tr>
 <tr>
+<td><code>--workers N</code></td>
+<td><code>max_parallel_pairs</code> (<code>2</code>)</td>
+<td>Override the maximum simultaneous pairs for this run;
+<code>1</code> is sequential.</td>
+</tr>
+<tr>
 <td><code>--version</code></td>
 <td>—</td>
 <td>Show the program version and exit.</td>
@@ -796,6 +809,19 @@ for several IDs.</td>
 </table>
 <h2 id="8-check-results-and-troubleshoot">8. Check results and
 troubleshoot</h2>
+<p>By default, two pairs synchronize/encode concurrently after coordinated
+readiness checks and promotion. Use <code>--workers 1</code> for sequential
+processing. Dry runs stay sequential and never write checkpoints. More
+workers may increase CPU, memory and disk contention.</p>
+<p>After failure or termination, rerun the normal command without
+<code>--reprocess</code>. Valid completed audio extractions, saved offsets
+and published videos are reused. An unfinished video encode restarts that
+video from the beginning, not from the last frame. Checkpoints live in
+<code>99_LOGS_QC\state</code> and <code>99_LOGS_QC\work\&lt;ID&gt;</code>.
+Work files contain study audio and need about 58 MB per camera-hour at
+the default sample rate; they are cleaned after success. A verified dead
+local lock owner is recovered immediately; active or unverifiable owners
+are not bypassed. Handled interruption returns exit code <code>130</code>.</p>
 <p>Look at <code>99_LOGS_QC\\pipeline_status.csv</code> for the
 participant statuses and messages. The dated log files are in
 <code>99_LOGS_QC\\logs</code>. The command exits with code
