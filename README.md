@@ -294,6 +294,9 @@ python -m pytest            # uses only synthetic media generated on the fly
 python -m build             # build source and wheel distributions
 ```
 
+The test extra includes the build backend requirements (`setuptools>=68` and `wheel`)
+because the wheel compatibility test builds without an isolated environment.
+
 GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10 and 3.13 on
 Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
 trusted publisher on PyPI for the repository and `pypi` environment before publishing.

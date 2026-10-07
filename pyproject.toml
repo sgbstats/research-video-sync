@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "build>=1"]
+test = ["pytest>=7", "build>=1", "setuptools>=68", "wheel"]
 
 [project.scripts]
 research-video-sync = "rg2019.cli:main"
