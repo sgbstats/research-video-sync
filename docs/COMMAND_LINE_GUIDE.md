@@ -99,7 +99,7 @@ The keys below are the complete set accepted by the current Python pipeline. Def
 | `require_approval` | `true` | Prompt for `yes` on real runs with eligible videos. A report with no eligible videos does not prompt. Set to `false` for unattended runs. |
 | `require_ready_marker` | `false` | Require a `READY.txt` marker for incoming material when enabled. |
 | `ready_marker_name` | `READY.txt` | Name of that marker file. |
-| `stability_minutes` | `120` | Minimum source-file age and unchanged prior-observation interval; `0` disables those two checks only. |
+| `stability_minutes` | `0` | Minimum source-file age and unchanged prior-observation interval; `0` disables those two checks only. |
 | `stability_recheck_seconds` | `5` | Pause, then check again for additions, removals or file changes; remains active when `stability_minutes` is `0`. Use `0` to disable this recheck. |
 | `stability_requires_prior_observation` | `true` | With positive `stability_minutes`, require a previous real-run observation of the unchanged files. Dry runs never save observations. |
 | `max_attempts` | `3` | Maximum automatic retries for sync/encode failures before manual reprocessing. |
@@ -155,7 +155,7 @@ research-video-sync --config config.json --dry-run
 Read the output and make sure the folders and participant videos it identifies are the ones you expect. A dry run does not create folders or write state; it lists matching videos and reports those waiting for stability. A real run prints a pre-run inventory of source videos to sync and those skipped or blocked (including missing/ambiguous matches, unsupported suffixes, and already-synced participants). When videos are eligible and `require_approval` is `true`, it requires you to type `yes` before processing. Any other response cancels and returns exit code `1`.
 If no videos are eligible to sync, the real-run command prints the report and exits without requesting approval or starting full processing. This includes pairs waiting for stability; first observations are recorded so a later run can recheck them. Review problems still return exit code `2`.
 
-With the default settings, a new participant can remain in a waiting status during a dry run. That is expected: the default stability check requires a prior **real** run to have observed the files unchanged. Repeating dry runs will not satisfy that check because dry runs do not save observations. The README explains how to do a one-off pilot dry run without changing files.
+When `stability_minutes` is set above `0` and prior observation is required, a new participant can remain in a waiting status during a dry run. That is expected: the stability check requires a prior **real** run to have observed the files unchanged. Repeating dry runs will not satisfy that check because dry runs do not save observations. The README explains how to do a one-off pilot dry run without changing files.
 
 ## 6. Run the pipeline
 
@@ -165,7 +165,7 @@ Only after reviewing the dry-run output, start a real run:
 research-video-sync --config config.json
 ```
 
-The pipeline waits until incoming files appear stable. With the default configuration, files must be at least 120 minutes old and must have been observed unchanged during an earlier real run; consequently, a new participant will normally wait until a later run. Transfer-in-progress files also block processing.
+The default `stability_minutes=0` disables the minimum-age and prior-observation checks. Transfer-in-progress files and the short growth re-check still block processing if files are arriving or changing. Set `stability_minutes` above `0` if you also want a minimum file age and the prior-observation interval.
 
 The pipeline accepts pairs directly in `00_INBOX` or in nested folders. Each participant ID needs exactly one `_mom` and one `_child` video in the same folder; the ID comes from the filenames or, if absent there, the folder path. Multiple ID pairs may share a folder. Source folders are preserved in `01_RAW` and `02_SYNCED`; status and logs are recorded under `99_LOGS_QC`. **Do not edit files in `01_RAW`.**
 
@@ -211,7 +211,7 @@ Common problems:
 | Message or situation | What to check |
 |---|---|
 | `ffmpeg was not found` | Install FFmpeg or set full paths for `ffmpeg` and `ffprobe` in `config.json`. |
-| Participant stays in a waiting status | Check `pipeline_status.csv` and the log. Waiting on a new participant is expected with the default prior-observation setting. |
+| Participant stays in a waiting status | Check `pipeline_status.csv` and the log. If `stability_minutes` is positive, review the age and prior-observation settings; transfer-file blocking and the growth re-check remain active at `0`. |
 | `MISSING_FILES` or `AMBIGUOUS_FILES` | Confirm there is exactly one `_mom` video and one `_child` video in the participant's inbox folder. |
 | `LOW_CONFIDENCE` | Review the recordings and status details; do not assume the estimated offset is correct. See the README before reprocessing or using a manual offset. |
 | `PROMOTE_FAILED` | A file may be locked by another program. Close it and run the pipeline again. `00_INBOX` and `01_RAW` must be on the same volume. |

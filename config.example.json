@@ -17,7 +17,7 @@
 
   "require_ready_marker": false,
   "ready_marker_name": "READY.txt",
-  "stability_minutes": 120,
+  "stability_minutes": 0,
   "stability_recheck_seconds": 5,
   "stability_requires_prior_observation": true,
 

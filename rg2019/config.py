@@ -56,7 +56,7 @@ class Config:
     video_extensions: list[str] = field(default_factory=lambda: [".mp4", ".avi", ".mov", ".mkv"])
     require_ready_marker: bool = False
     ready_marker_name: str = "READY.txt"
-    stability_minutes: float = 120.0
+    stability_minutes: float = 0.0
     stability_recheck_seconds: float = 5.0
     stability_requires_prior_observation: bool = True
     create_side_by_side: bool = False
