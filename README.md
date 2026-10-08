@@ -219,6 +219,7 @@ Other options: `--setup FOLLOWUP_ROOT` (create config and folder structure), `--
 `--workers N` (override the pair limit without editing config), `--log-level DEBUG`. Exit code `0` = fine, `1` = real run cancelled at approval, `2` = something needs manual review/failed, `3` = config/tool/lock problem, `130` = interrupted.
 The run ends with a summary (Newly completed / Skipped completed / Waiting / Manual review / Failed, with IDs).
 `--yolo` still prints the pre-run report and retains transfer-file detection, the configured growth re-check, and the run lock. Changing `video_description` for existing outputs requires `--reprocess`; prior files are archived.
+The pre-run report lists videos under INBOX and RAW that have no unique participant ID matching `participant_id_regex` or match neither `mom_pattern` nor `child_pattern`, including files in nested folders. Each entry shows its path and the unmatched patterns; mother/child patterns remain case-insensitive substrings, not regular expressions. With `--participant`, this list is restricted to videos identified as belonging to the selected participants.
 If the pre-run report finds no videos eligible to sync (including when all are already synced or waiting), the command prints the report and exits without asking for approval or starting a full run. It records any first stability observations so a later run can proceed. Review problems still return exit code `2`.
 Daily scheduling: [docs/WINDOWS_TASK_SCHEDULER.md](docs/WINDOWS_TASK_SCHEDULER.md).
 

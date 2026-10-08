@@ -410,6 +410,60 @@ def test_preflight_report_counts_matches_extras_and_unsupported_suffix(cfg, make
     assert "ID100392_mom.wmv" in report
 
 
+def test_preflight_report_lists_unmatched_videos_across_source_layouts(cfg, video_cache):
+    unmatched = [
+        cfg.inbox_dir / "unidentified_mom.mp4",
+        cfg.inbox_dir / "bad name" / "session_child.MP4",
+        cfg.raw_dir / "batch" / "camera" / "ID100392_extra.mp4",
+        cfg.raw_dir / "batch" / "camera" / "unidentified.mp4",
+    ]
+    matched = [
+        cfg.inbox_dir / "ID100534" / "camera" / f"session_{role}.MP4"
+        for role in ("mom", "child")
+    ]
+    ignored = [
+        cfg.inbox_dir / "@cache" / "ignored.mp4",
+        cfg.inbox_dir / ".syno_transfer.mp4",
+        cfg.inbox_dir / "notes.txt",
+        cfg.inbox_dir / "upload.mp4.partial",
+    ]
+    for path in unmatched + ignored:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"video")
+    source = video_cache(0, 5)
+    for path, role in zip(matched, ("mom", "child")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / f"{role}.mp4", path)
+    before = tree(cfg.followup_root)
+
+    report = cli.preflight_report(cfg)
+    section = report.split("Videos not matching configured patterns: ", 1)[1].split("\nNo match:", 1)[0]
+
+    assert section.startswith("4 video(s)")
+    for path in unmatched:
+        assert str(path.relative_to(cfg.followup_root)) in section
+    for path in matched + ignored:
+        assert str(path.relative_to(cfg.followup_root)) not in section
+    assert "no unique participant ID matching" in section
+    assert (f"neither mother pattern {cfg.mom_pattern!r} "
+            f"nor child pattern {cfg.child_pattern!r} matches") in section
+    assert "Won't sync this run: 4 video/file(s)" in report
+    assert tree(cfg.followup_root) == before
+
+
+def test_preflight_unmatched_videos_respect_participant_selection(cfg):
+    for name in ("ID100392_extra.mp4", "ID100534_extra.mp4", "unknown.mp4"):
+        (cfg.inbox_dir / name).write_bytes(b"video")
+
+    report = cli.preflight_report(cfg, only=["ID100392"])
+    section = report.split("Videos not matching configured patterns: ", 1)[1].split("\nNo match:", 1)[0]
+
+    assert section.startswith("1 video(s)")
+    assert "ID100392_extra.mp4" in section
+    assert "ID100534_extra.mp4" not in section
+    assert "unknown.mp4" not in section
+
+
 def test_cli_real_run_starts_only_after_approval(cfg, make_participant, project,
                                                 capsys, tmp_path, monkeypatch):
     make_participant("ID100392")
