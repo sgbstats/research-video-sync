@@ -16,12 +16,16 @@ First [install the command](#1-prerequisites-and-installation) with Python >= 3.
 ```powershell
 # Initialize the target folder and review its configuration.
 research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+
+# Make changes if needed.
 notepad "D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json"
 ```
 
 Place each participant's mother and child recordings in a folder such as
-`D:\RG2019_CAMERAS\FOLLOWUP_2026\00_INBOX\ID100392`, with filenames containing
-`_mom` and `_child` respectively (or adjust the patterns in the config). Let transfers finish, then:
+`D:\RG2019_CAMERAS\FOLLOWUP_2026\00_INBOX\ID12345`, with filenames containing
+`_mom` and `_child` respectively (or adjust the patterns in the config). Folders are preserved (but not strictly necessary), and videos are only matched if they are in the same folder.
+
+Let transfers finish, then:
 
 ```powershell
 # Preview first: no files are moved or encoded.
