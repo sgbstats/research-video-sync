@@ -1,6 +1,7 @@
 # research-video-sync
 
 [![CI](https://github.com/sgbstats/research-video-sync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sgbstats/research-video-sync/actions/workflows/ci.yml)
+[![Combined coverage baseline (2026-10-08): 88.6%](https://img.shields.io/badge/coverage%20baseline-88.6%25-green)](#coverage-assessment-2026-10-08)
 
 Audio-based synchronisation of the two camera recordings (mother / child) of the RG2019 follow-up
 study, designed for a **Synology-Drive-synchronised project folder** on a private Windows workstation.
@@ -356,8 +357,9 @@ GitHub Actions runs tests and builds distributions on pushes and pull requests f
 Windows and Linux. Each matrix job measures line and branch coverage for `rg2019` and the compatibility
 entry point, prints uncovered lines in its test log, and retains XML and HTML coverage reports as a
 `coverage-<os>-python-<version>` artifact for 14 days. Download an artifact from the CI run and open
-`htmlcov/index.html` for the annotated source report. The README badge shows CI status on `main`,
-not a coverage percentage. Coverage does not currently enforce a minimum percentage or include the
+`htmlcov/index.html` for the annotated source report. The CI badge shows status on `main`; the
+coverage baseline badge shows the dated combined coverage assessment below and is updated manually,
+not by CI. Coverage does not currently enforce a minimum percentage or include the
 legacy shell scripts; Python subprocess coverage is not collected.
 
 Publishing is triggered by a published GitHub release; configure the `research-video-sync`
