@@ -9,6 +9,33 @@ study, designed for a **Synology-Drive-synchronised project folder** on a privat
 > (`sync_videos.sh`), and abort after the first participant (`set -e`). See [docs/LEGACY_AUDIT.md](docs/LEGACY_AUDIT.md).
 > The two HTML guides describe that legacy workflow.
 
+## Quick start
+
+First [install the command](#1-prerequisites-and-installation) with Python >= 3.10. Then, in PowerShell:
+
+```powershell
+# Initialize the target folder and review its configuration.
+research-video-sync --setup "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+notepad "D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json"
+```
+
+Place each participant's mother and child recordings in a folder such as
+`D:\RG2019_CAMERAS\FOLLOWUP_2026\00_INBOX\ID100392`, with filenames containing
+`_mom` and `_child` respectively (or adjust the patterns in the config). Let transfers finish, then:
+
+```powershell
+# Preview first: no files are moved or encoded.
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
+
+# Process the recordings; review the report and type yes when prompted.
+research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"
+```
+
+Both commands use **`D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json`**, regardless of your
+current directory. Originals are moved into `01_RAW`, synced videos are written to
+`02_SYNCED`, and status/logs are stored in `99_LOGS_QC`, under the target folder with
+the default configuration.
+
 ## 1. Prerequisites and installation
 
 For a step-by-step command-line walkthrough, see the [beginner's guide](docs/COMMAND_LINE_GUIDE.md).
@@ -70,7 +97,25 @@ research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"
 research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026" --dry-run
 ```
 
-These commands read `config.json` from the selected directory and use that directory as `followup_root` for this run, without rewriting the file. The directory and a readable, valid config must exist; missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool checks or processing. Use `--setup DIRECTORY` to initialize a missing config. `--config-path PATH` takes precedence over both the current working directory and any directory argument: it loads the specified config and uses its configured `followup_root`. Relative config paths are resolved from the current working directory.
+### Which config file is used?
+
+| Command | Config file loaded | Data root used |
+|---|---|---|
+| `research-video-sync` | `config.json` in the current working directory | Current working directory |
+| `research-video-sync "D:\RG2019_CAMERAS\FOLLOWUP_2026"` | `D:\RG2019_CAMERAS\FOLLOWUP_2026\config.json` | The supplied target directory |
+| `research-video-sync --config-path PATH` | The explicitly specified file | Its configured `followup_root` |
+
+**Passing a directory uses that target directory's config, not the current directory's config.**
+Without an explicit config option, the selected directory overrides `followup_root` for that
+run without rewriting the file. The directory and a readable, valid config must exist;
+missing or invalid configs stop the run with `CONFIG ERROR` and exit code `3` before tool
+checks or processing. There is **no fallback** to a config in the current directory.
+Use `--setup DIRECTORY` to initialize a missing config.
+
+`--config-path PATH` (also `--config` or `--config_path`) takes precedence over both the
+current working directory and any directory argument: it loads the specified config and
+uses its configured `followup_root`. Relative config paths are resolved from the current
+working directory.
 
 `config.json` is git-ignored (machine-specific). The root and packaged example configs contain only fake paths.
 
