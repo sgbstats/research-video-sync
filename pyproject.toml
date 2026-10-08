@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7", "build>=1", "setuptools>=68", "wheel"]
+test = ["pytest>=7", "pytest-cov>=7", "build>=1", "setuptools>=68", "wheel"]
 
 [project.scripts]
 research-video-sync = "rg2019.cli:main"
@@ -26,3 +26,11 @@ py-modules = ["pipeline_rg2019"]
 
 [tool.setuptools.package-data]
 rg2019 = ["config.example.json"]
+
+[tool.coverage.run]
+source = ["rg2019", "pipeline_rg2019"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true

@@ -1,5 +1,8 @@
 # research-video-sync
 
+[![CI](https://github.com/sgbstats/research-video-sync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sgbstats/research-video-sync/actions/workflows/ci.yml)
+[![Combined coverage baseline (2026-10-08): 88.6%](https://img.shields.io/badge/coverage%20baseline-88.6%25-green)](#coverage-assessment-2026-10-08)
+
 Audio-based synchronisation of the two camera recordings (mother / child) of the RG2019 follow-up
 study, designed for a **Synology-Drive-synchronised project folder** on a private Windows workstation.
 
@@ -343,6 +346,7 @@ synced videos on the next run; if it exists but differs from the recorded size o
 ```bash
 python -m pip install -e ".[test]"
 python -m pytest            # uses only synthetic media generated on the fly
+python -m pytest --cov --cov-report=term-missing --cov-report=xml --cov-report=html
 python -m build             # build source and wheel distributions
 ```
 
@@ -350,12 +354,39 @@ The test extra includes the build backend requirements (`setuptools>=68` and `wh
 because the wheel compatibility test builds without an isolated environment.
 
 GitHub Actions runs tests and builds distributions on pushes and pull requests for Python 3.10, 3.12 and 3.13 on
-Windows and Linux. Publishing is triggered by a published GitHub release; configure the `research-video-sync`
+Windows and Linux. Each matrix job measures line and branch coverage for `rg2019` and the compatibility
+entry point, prints uncovered lines in its test log, and retains XML and HTML coverage reports as a
+`coverage-<os>-python-<version>` artifact for 14 days. Download an artifact from the CI run and open
+`htmlcov/index.html` for the annotated source report. The CI badge shows status on `main`; the
+coverage baseline badge shows the dated combined coverage assessment below and is updated manually,
+not by CI. Coverage does not currently enforce a minimum percentage or include the
+legacy shell scripts; Python subprocess coverage is not collected.
+
+Publishing is triggered by a published GitHub release; configure the `research-video-sync`
 trusted publisher on PyPI for the repository and `pypi` environment before publishing.
 
 Layout: `research-video-sync` (installed command), `rg2019/` (Python module), `pipeline_rg2019.py` (compatibility entry point), `tests/`, `docs/`.
 **Never commit research data**: this repository is public and `.gitignore` excludes media, tables,
 logs, participant folders, pipeline state and local configs. Tests never read real study files.
+
+### Coverage assessment (2026-10-08)
+
+The local Windows / Python 3.14.2 baseline measured **90.6% line coverage** (1,926/2,127
+statements), **82.8% branch coverage** (608/734 branches), and **88.6% combined coverage**.
+These are a dated assessment, not the live CI matrix results.
+
+The suite exercises synthetic-media synchronization, RAW/output integrity, restart checkpoints,
+parallel processing, configuration, CLI behavior, packaging, and process ownership. The main
+reported gaps are `processes.py` (71% combined), `pipeline.py` (88%), and `cli.py` (89%).
+Prioritize promotion/recovery error paths and CLI interruption handling when expanding tests.
+The process coverage figure includes Linux-only paths that cannot execute on Windows; module
+entry points and child-process execution also appear uncovered because subprocess coverage is
+not collected. Read these figures as execution coverage, not proof of correctness.
+
+The full run had 297 passing tests, one platform skip, and one timing-sensitive failure:
+`test_cli_dry_run_lists_videos_waiting_for_stability` expects recently modified files, but its
+session-cached video fixtures had aged beyond the configured 10-minute window during the run.
+It passed independently with fresh fixtures. That fixture-age coupling remains unresolved.
 
 ## 9. Assumptions and known limits
 

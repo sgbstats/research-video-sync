@@ -1,3 +1,4 @@
 -r requirements.txt
 pytest>=7
+pytest-cov>=7
 build>=1
