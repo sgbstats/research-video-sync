@@ -20,9 +20,11 @@ from rg2019 import __version__, config as cfgmod, media
 from rg2019.discovery import (
     discover_jobs,
     find_sources,
+    is_ignored_dir,
     is_junk_file,
     is_transit_file,
     valid_participant_id,
+    video_id,
 )
 from rg2019.pipeline import Pipeline, Summary
 from rg2019.state import RunLock, StateStore
@@ -138,9 +140,30 @@ def preflight_inventory(cfg: cfgmod.Config, only: list[str] | None = None,
 
     videos_by_pid: dict[str, list[Path]] = {}
     jobs_by_pid = {}
+    selected = set(only or [])
+    unmatched_videos: dict[Path, str] = {}
     for root in (cfg.inbox_dir, cfg.raw_dir):
         if not root.is_dir():
             continue
+        for path in sorted(root.rglob("*")):
+            if (not path.is_file() or path.suffix.lower() not in cfg.video_extensions
+                    or is_junk_file(path.name) or is_transit_file(path.name)
+                    or any(is_ignored_dir(parent.name)
+                           and not valid_participant_id(cfg, parent.name)
+                           for parent in path.relative_to(root).parents if parent != Path("."))):
+                continue
+            pid = video_id(cfg, path, root)
+            if selected and pid not in selected:
+                continue
+            reasons = []
+            if pid is None:
+                reasons.append(f"no unique participant ID matching {cfg.participant_id_regex!r}")
+            if not (cfg.mom_pattern.lower() in path.stem.lower()
+                    or cfg.child_pattern.lower() in path.stem.lower()):
+                reasons.append(f"neither mother pattern {cfg.mom_pattern!r} "
+                               f"nor child pattern {cfg.child_pattern!r} matches")
+            if reasons:
+                unmatched_videos[path] = "; ".join(reasons)
         for pid, job in discover_jobs(cfg, root).items():
             jobs_by_pid.setdefault(pid, []).append(job)
             videos_by_pid.setdefault(pid, []).extend(job.mom + job.child + job.both)
@@ -154,7 +177,6 @@ def preflight_inventory(cfg: cfgmod.Config, only: list[str] | None = None,
     for paths in videos_by_pid.values():
         paths.sort(key=lambda path: str(path).lower())
     outcomes = {outcome.pid: outcome for outcome in summary.outcomes}
-    selected = set(only or [])
     participant_dirs: dict[str, list[Path]] = {}
     for root in (cfg.inbox_dir, cfg.raw_dir):
         if not root.is_dir():
@@ -243,6 +265,11 @@ def preflight_inventory(cfg: cfgmod.Config, only: list[str] | None = None,
                 lines.append(f"  {display_path} ({pid})")
 
     add_group("Already synced (will be skipped)", already_synced)
+    lines.append(f"Videos not matching configured patterns: {len(unmatched_videos)} video(s)")
+    for path, reason in sorted(unmatched_videos.items(), key=lambda item: str(item[0]).lower()):
+        display_path = (path.relative_to(cfg.followup_root)
+                        if path.is_relative_to(cfg.followup_root) else path)
+        lines.append(f"  {display_path}: {reason}")
     lines.append(f"No match: {sum(len(paths) for _, paths in no_match.values())} video(s) "
                  f"across {len(no_match)} participant(s)")
     for pid, (reason, paths) in sorted(no_match.items()):
@@ -268,6 +295,7 @@ def preflight_inventory(cfg: cfgmod.Config, only: list[str] | None = None,
     }
     excluded_paths.update(path for _, paths in no_match.values() for path in paths)
     excluded_paths.update(path for _, paths in blocked.values() for path in paths)
+    excluded_paths.update(unmatched_videos)
     lines.insert(5, f"Won't sync this run: {len(excluded_paths)} video/file(s) "
                      f"(see exclusion reasons below)")
     lines.append("=" * 64)
