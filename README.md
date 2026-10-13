@@ -263,6 +263,46 @@ local lock owner can be recovered immediately; live or unverifiable owners remai
 Existing retry limits and manual-review rules still apply. Checkpoints protect process-interruption
 boundaries, not arbitrary disk corruption or power-loss durability.
 
+### Slurm and spot/preemptible nodes
+
+Keep the project (including `01_RAW`, `02_SYNCED`, and `99_LOGS_QC`) and the Python environment
+on shared storage that survives the allocation. Resume by rerunning the **same normal command**,
+not `--reprocess`. Completed participants and camera outputs are reused; an interrupted
+side-by-side encode is restarted without encoding the two cameras again.
+
+The CLI handles `SIGTERM` and `SIGUSR1` by stopping its FFmpeg children, retaining checkpoints,
+and releasing the run lock. Signal exits use `128 + signal number` (`143` for SIGTERM on Linux).
+A hard kill cannot run cleanup. New locks record the Slurm job, cluster, and restart count;
+on another node the pipeline uses `scontrol show job` to verify that the old job has ended
+or that the same job is running in a newer requeue generation before reclaiming the lock.
+Active jobs, other clusters, missing scheduler records, and scheduler errors never permit
+lock stealing. Old locks without Slurm metadata still require verified local process death;
+before manually removing an old cross-node lock, verify that its job and writers have stopped.
+
+In your batch script, keep the module/virtualenv setup and thread limits, add these directives,
+and replace the final command with `exec` so Slurm signals reach Python rather than stopping
+at the shell:
+
+```bash
+#SBATCH --requeue
+#SBATCH --signal=B:USR1@120
+
+# ...module loads, virtualenv activation, and thread limits...
+exec research-video-sync "/path/to/shared/videos" --yolo
+```
+
+These directives must be with the other `#SBATCH` lines, before any shell commands.
+`--requeue` makes the job eligible for requeue; actual spot/preemption requeue depends on
+cluster policy. The USR1 warning allows cleanup before the time limit; it does **not** itself
+request requeue. A rerun or requeue must execute the same command against the same shared data.
+
+If FFmpeg reports `Unable to re-open ... output file` and state writes also report missing
+directories or permission errors, storage became inaccessible during the job. This is not
+fixed by resuming an encode: restore the mount/access first. The pipeline reports the original
+encode failure even if it cannot save failure state, and does not recreate a missing data root.
+Existing on-disk checkpoints remain the resume source; if storage itself lost the files, the
+pipeline cannot recover them.
+
 FFmpeg already uses multiple CPU threads, so more workers do not guarantee higher throughput.
 Start with two, reduce to one if CPU, memory, or storage contention is excessive, and increase only
 after measuring representative recordings. Encoding remains CPU-based; GPU support is not added here.
