@@ -152,7 +152,11 @@ class Pipeline:
 
     def _fail(self, st: dict, status: str, msg: str, kind: str = "") -> Outcome:
         self._set(st, status, msg)
-        self._save(st)
+        try:
+            self._save(st)
+        except OSError as exc:
+            msg += f"; could not save failure state: {exc}. Restore storage access and rerun to resume."
+            log.error("%s: %s", st["participant_id"], msg)
         log.warning("%s -> %s: %s", st["participant_id"], status, msg)
         return Outcome(st["participant_id"], status, msg, kind)
 

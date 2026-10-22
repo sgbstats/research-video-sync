@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import signal
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -351,6 +353,39 @@ def request_approval() -> bool:
 
 
 def main(argv=None) -> int:
+    previous = {}
+    interrupted_signal = None
+
+    def interrupt(signum, frame):
+        nonlocal interrupted_signal
+        interrupted_signal = signum
+        # Allow child cancellation and lock release to finish if Slurm signals again.
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        raise media.MediaCancelled()
+
+    if threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGUSR1"):
+            sig = getattr(signal, name, None)
+            if sig is not None:
+                previous[sig] = signal.signal(sig, interrupt)
+    try:
+        try:
+            result = _main(argv)
+        except (KeyboardInterrupt, media.MediaCancelled):
+            log.warning("Run interrupted; completed checkpoints are retained. Rerun the normal command to resume.")
+            result = 130
+        except OSError as exc:
+            log.error("Filesystem unavailable or not writable: %s. Restore storage access and "
+                      "rerun the normal command to resume; do not use --reprocess.", exc)
+            result = 3
+        return 128 + interrupted_signal if interrupted_signal is not None else result
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _main(argv=None) -> int:
     args = parse_args(argv)
     if args.setup is not None:
         followup_root = args.setup.expanduser().resolve()

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import socket
+import subprocess
 import threading
 import time
 import uuid
@@ -69,7 +70,13 @@ class StateStore:
     def path(self, pid: str) -> Path:
         return self.dir / f"{pid}.json"
 
+    def _require_root(self) -> None:
+        if not self.cfg.followup_root.is_dir():
+            raise FileNotFoundError(f"Data root is unavailable: {self.cfg.followup_root}; "
+                                    "restore storage access before resuming")
+
     def load(self, pid: str, now: str) -> dict[str, Any]:
+        self._require_root()
         p = self.path(pid)
         if not p.exists():
             return new_state(pid, now)
@@ -78,7 +85,7 @@ class StateStore:
             if st.get("participant_id") != pid:
                 raise ValueError("participant_id mismatch")
             return st
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
             bad = p.with_name(p.name + f".corrupt-{now.replace(':', '')}")
             os.replace(p, bad)
             st = new_state(pid, now)
@@ -86,6 +93,7 @@ class StateStore:
             return st
 
     def save(self, st: dict[str, Any]) -> None:
+        self._require_root()
         st["history"] = st.get("history", [])[-HISTORY_LIMIT:]
         atomic_write_text(self.path(st["participant_id"]),
                           json.dumps(st, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
@@ -106,6 +114,7 @@ class StateStore:
     def rewrite_csv(self) -> None:
         """Regenerate the human-readable master CSV from the state files (one row per participant,
         so running the pipeline many times can never create duplicate rows)."""
+        self._require_root()
         rows = []
         for pid in self.all_ids():
             try:
@@ -144,7 +153,8 @@ class RunLock:
     """Prevents two daily runs from overlapping (e.g. a long run + the next scheduled trigger).
 
     Structured local owners are recovered immediately only after verifying death or PID reuse.
-    Live, foreign-host and unverifiable structured owners are never stolen. Legacy records retain
+    Slurm owners require scheduler-verified completion or a newer requeue generation.
+    Other live, foreign-host and unverifiable structured owners are never stolen. Legacy records retain
     the age-based recovery policy. A persistent OS-locked guard serializes reclaim, heartbeat and
     release; its existence does not indicate an active run and it must not be removed."""
 
@@ -207,12 +217,55 @@ class RunLock:
         record = self._record()
         if record is None:
             return age >= self.stale
+        if record.get("slurm"):
+            return self._slurm_reclaimable(record["slurm"])
         if record["host"].casefold() != self._host:
             return False
         status, identity = process_identity(record["pid"])
         return status == "dead" or (status == "alive" and identity is not None
                                     and record["identity"] is not None
                                     and identity != record["identity"])
+
+    @staticmethod
+    def _slurm_owner() -> dict | None:
+        job = os.environ.get("SLURM_JOB_ID", "")
+        cluster = os.environ.get("SLURM_CLUSTER_NAME", "")
+        restart = os.environ.get("SLURM_RESTART_COUNT", "0")
+        if not (job.isdecimal() and cluster and restart.isdecimal()):
+            return None
+        return {"job_id": job, "cluster": cluster, "restart_count": int(restart)}
+
+    def _slurm_reclaimable(self, owner: object) -> bool:
+        current = self._slurm_owner()
+        if (not isinstance(owner, dict) or not current
+                or owner.get("cluster") != current["cluster"]
+                or not isinstance(owner.get("job_id"), str)
+                or not owner["job_id"].isdecimal()
+                or type(owner.get("restart_count")) is not int):
+            return False
+        try:
+            result = subprocess.run(
+                ["scontrol", "show", "job", owner["job_id"], "--oneliner"],
+                capture_output=True, text=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _log.warning("Cannot verify Slurm lock owner job %s: %s", owner["job_id"], exc)
+            return False
+        if result.returncode != 0:
+            _log.warning("Cannot verify Slurm lock owner job %s: %s",
+                         owner["job_id"], result.stderr.strip())
+            return False
+        fields = dict(token.split("=", 1) for token in result.stdout.split() if "=" in token)
+        if fields.get("JobId") != owner["job_id"]:
+            return False
+        if fields.get("JobState") in {
+                "BOOT_FAIL", "CANCELLED", "COMPLETED", "DEADLINE", "FAILED",
+                "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "TIMEOUT"}:
+            return True
+        restart = fields.get("Restarts", "")
+        return (owner["job_id"] == current["job_id"]
+                and fields.get("JobState") == "RUNNING"
+                and restart.isdecimal()
+                and int(restart) == current["restart_count"] > owner["restart_count"])
 
     def _heartbeat(self) -> None:
         while not self._stop.wait(self.interval):
@@ -250,6 +303,9 @@ class RunLock:
                                   "pid": os.getpid(), "owner": f"pid={os.getpid()}",
                                   "identity": process_identity(os.getpid())[1], "token": self._token,
                                   "started": datetime.now().isoformat(timespec="seconds")}
+                        slurm = self._slurm_owner()
+                        if slurm is not None:
+                            record["slurm"] = slurm
                         fh.write(json.dumps(record) + "\n")
                         fh.flush()
                         os.fsync(fh.fileno())

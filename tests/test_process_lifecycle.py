@@ -14,12 +14,181 @@ from types import SimpleNamespace
 import pytest
 
 from rg2019 import media
+from rg2019 import cli
 from rg2019 import state as state_module
 from rg2019.processes import process_identity
-from rg2019.state import RunLock
+from rg2019.state import RunLock, StateStore, new_state
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNED_PLATFORMS = os.name == "nt" or sys.platform.startswith("linux")
+
+
+@pytest.mark.parametrize("job_state,restarts,current_job,current_restart,expected", [
+    ("RUNNING", "0", "113", "0", False),
+    ("RUNNING", "1", "113", "1", True),
+    ("RUNNING", "1", "114", "1", False),
+    ("RUNNING", "2", "113", "1", False),
+    ("RUNNING", "bad", "113", "1", False),
+    ("PENDING", "1", "113", "1", False),
+    ("COMPLETING", "0", "114", "0", False),
+    ("NODE_FAIL", "0", "114", "0", True),
+    ("COMPLETED", "0", "114", "0", True),
+    ("CANCELLED", "0", "114", "0", True),
+])
+def test_slurm_lock_recovery_verifies_scheduler(
+        tmp_path, monkeypatch, job_state, restarts, current_job, current_restart, expected):
+    monkeypatch.setenv("SLURM_JOB_ID", current_job)
+    monkeypatch.setenv("SLURM_CLUSTER_NAME", "test-cluster")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", current_restart)
+    calls = []
+
+    def query(command, **kwargs):
+        calls.append(command)
+        assert kwargs["timeout"] == 10
+        return subprocess.CompletedProcess(command, 0,
+            f"JobId=113 JobState={job_state} Restarts={restarts}", "")
+
+    monkeypatch.setattr(state_module.subprocess, "run", query)
+    lock = RunLock(tmp_path / "pipeline.lock", 24)
+    record = {"schema": "rg2019-run-lock-1", "host": "previous-node", "pid": 123,
+              "identity": "previous-process", "token": "a" * 32,
+              "slurm": {"job_id": "113", "cluster": "test-cluster", "restart_count": 0}}
+    lock.path.write_text(json.dumps(record))
+    if expected:
+        with lock:
+            saved = json.loads(lock.path.read_text())
+            assert saved["slurm"] == {"job_id": current_job, "cluster": "test-cluster",
+                                     "restart_count": int(current_restart)}
+            assert saved["token"] != record["token"]
+    else:
+        with pytest.raises(RuntimeError, match="not verified abandoned"):
+            lock.acquire()
+        assert json.loads(lock.path.read_text()) == record
+    assert calls == [["scontrol", "show", "job", "113", "--oneliner"]]
+
+
+@pytest.mark.parametrize("failure", ["missing-tool", "timeout", "missing-job", "wrong-job", "cluster"])
+def test_unverifiable_slurm_owner_is_not_stolen(tmp_path, monkeypatch, failure):
+    monkeypatch.setenv("SLURM_JOB_ID", "114")
+    monkeypatch.setenv("SLURM_CLUSTER_NAME", "test-cluster")
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
+
+    def query(command, **kwargs):
+        if failure == "missing-tool":
+            raise FileNotFoundError("scontrol")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 10)
+        if failure == "cluster":
+            pytest.fail("do not query an owner in a different cluster")
+        return subprocess.CompletedProcess(command, 1 if failure == "missing-job" else 0,
+                                           "JobId=999 JobState=COMPLETED", "unknown job")
+
+    monkeypatch.setattr(state_module.subprocess, "run", query)
+    owner = {"job_id": "113", "cluster": "other" if failure == "cluster" else "test-cluster",
+             "restart_count": 0}
+    assert not RunLock(tmp_path / "pipeline.lock", 24)._slurm_reclaimable(owner)
+
+
+def test_unreadable_state_is_not_archived_as_corrupt(cfg, monkeypatch):
+    store = StateStore(cfg)
+    store.save(new_state("ID100392", "now"))
+    original = store.path("ID100392").read_bytes()
+    read_text = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if path == store.path("ID100392"):
+            raise PermissionError("shared storage unavailable")
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(PermissionError, match="shared storage"):
+        store.load("ID100392", "later")
+    assert store.path("ID100392").read_bytes() == original
+    assert not list(store.dir.glob("*.corrupt-*"))
+
+
+@pytest.mark.parametrize("operation", ["save", "load", "csv"])
+def test_state_access_does_not_recreate_missing_data_root(cfg, operation):
+    moved = cfg.followup_root.with_name("storage-offline")
+    cfg.followup_root.rename(moved)
+    with pytest.raises(FileNotFoundError, match="Data root is unavailable"):
+        store = StateStore(cfg)
+        if operation == "save":
+            store.save(new_state("ID100392", "now"))
+        elif operation == "load":
+            store.load("ID100392", "now")
+        else:
+            store.rewrite_csv()
+    assert not cfg.followup_root.exists()
+
+
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGUSR1"])
+def test_cli_signals_unwind_lock_and_restore_handlers(tmp_path, monkeypatch, name):
+    import signal
+    sig = getattr(signal, name, None)
+    if sig is None:
+        pytest.skip(f"{name} unavailable on this platform")
+    previous = signal.getsignal(sig)
+    lock_path = tmp_path / "pipeline.lock"
+
+    def run(argv):
+        with RunLock(lock_path, 24):
+            signal.getsignal(sig)(sig, None)
+
+    monkeypatch.setattr(cli, "_main", run)
+    assert cli.main([]) == 128 + sig
+    assert not lock_path.exists()
+    assert signal.getsignal(sig) == previous
+
+
+def test_cli_reports_storage_error_without_traceback(monkeypatch, caplog):
+    def run(argv):
+        raise PermissionError("scratch mount disappeared")
+    monkeypatch.setattr(cli, "_main", run)
+    assert cli.main([]) == 3
+    assert "scratch mount disappeared" in caplog.text
+    assert "Restore storage access" in caplog.text
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="real Slurm signals require Linux")
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGUSR1"])
+def test_real_slurm_signal_stops_writer_and_releases_lock(tmp_path, signal_name):
+    import signal
+    marker, lock_path = tmp_path / "writer.pid", tmp_path / "pipeline.lock"
+    code = """
+import sys
+from pathlib import Path
+from rg2019 import cli, media
+from rg2019.state import RunLock
+def run(argv):
+    with RunLock(Path(sys.argv[1]), 24):
+        with media.process_scope():
+            media._run([sys.executable, '-c', sys.argv[3], sys.argv[2]], 'writer')
+cli._main = run
+sys.exit(cli.main([]))
+"""
+    parent = subprocess.Popen([sys.executable, "-c", code, str(lock_path), str(marker),
+                               writer_command(marker)[2]], cwd=ROOT,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    child_pid = None
+    try:
+        wait_for(lambda: marker.exists() and marker.read_text() or parent.poll() is not None)
+        if parent.poll() is not None:
+            pytest.fail(f"parent failed to start writer: {parent.communicate()[1]!r}")
+        child_pid = int(marker.read_text())
+        sig = getattr(signal, signal_name)
+        parent.send_signal(sig)
+        assert parent.wait(timeout=15) == 128 + sig
+        wait_for(lambda: process_identity(child_pid)[0] == "dead")
+        assert not lock_path.exists()
+        with RunLock(lock_path, 24):
+            assert process_identity(child_pid)[0] == "dead"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.communicate(timeout=10)
+        if child_pid is not None and process_identity(child_pid)[0] == "alive":
+            os.kill(child_pid, 9)
 
 
 def wait_for(predicate, timeout=15):

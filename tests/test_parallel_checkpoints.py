@@ -270,6 +270,46 @@ def test_kill_publication_boundaries_resume_without_reencoding(cfg, make_partici
     monkeypatch.setattr(media, "side_by_side", side)
 
 
+def test_side_by_side_storage_failure_resumes_committed_cameras(
+        cfg, make_participant, monkeypatch, caplog):
+    cfg.create_side_by_side = True
+    make_participant(PID)
+    save = Pipeline._save
+    side = media.side_by_side
+    offline = False
+
+    def unavailable_side(c, mom, child, dest):
+        nonlocal offline
+        offline = True
+        dest.write_bytes(b"incomplete encode")
+        raise media.MediaError("Unable to re-open output file for shifting data")
+
+    def unavailable_save(self, st):
+        if offline:
+            raise PermissionError("scratch unavailable")
+        return save(self, st)
+
+    monkeypatch.setattr(media, "side_by_side", unavailable_side)
+    monkeypatch.setattr(Pipeline, "_save", unavailable_save)
+    result = Pipeline(cfg).run()
+    assert result.failed == [PID]
+    assert result.outcomes[0].status == S.ENCODE_FAILED
+    assert "Unable to re-open" in result.outcomes[0].message
+    assert "scratch unavailable" in result.outcomes[0].message
+    assert "unexpected error" not in caplog.text
+    persisted = state(cfg)
+    assert set(persisted["outputs"]["files"]) == {"mom", "child"}
+    assert persisted["attempts"] == 0
+
+    monkeypatch.setattr(Pipeline, "_save", save)
+    monkeypatch.setattr(media, "side_by_side", side)
+    monkeypatch.setattr(media, "encode", lambda *a: pytest.fail("reuse completed cameras"))
+    monkeypatch.setattr(media, "extract_audio", lambda *a: pytest.fail("reuse recorded offset"))
+    assert Pipeline(cfg).run().newly_completed == [PID]
+    assert not list(cfg.synced_dir.rglob("*.partial"))
+    assert Pipeline(cfg).run().skipped_completed == [PID]
+
+
 def test_tampered_pending_output_is_not_adopted(cfg, make_participant, monkeypatch):
     make_participant(PID)
     save = Pipeline._save
